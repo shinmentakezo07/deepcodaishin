@@ -159,7 +159,8 @@ if (incoming.headers.origin || !timingSafeEqual(incoming.headers.authorization, 
 
 Two consequences that shaped the proxy:
 
-* it **refuses any request carrying an `Origin` header** (blocks drive-by browser calls / CSRF),
+* it **refuses non-loopback browser origins** (blocks drive-by browser calls / CSRF), with a
+  narrow loopback exception for the local control panel,
 * with `PROXY_TOKEN` set it requires `Authorization: Bearer <token>` — same shape, but the token is
   the user's, not a per-process capability.
 
@@ -216,24 +217,27 @@ Zero dependencies, ESM, Node 18+ (`fetch`, `AbortSignal.timeout`, `crypto.random
 | `deepai-proxy.mjs` | CLI dispatch (`login`, `import-app`, `serve`, `whoami`) |
 | `src/config.mjs` | env vars, paths, upstream constants |
 | `src/fingerprint.mjs` | machine id + lane/instance headers |
-| `src/account.mjs` | load/save/require `acc.json` |
+| `src/account.mjs` | multi-account store (`acc.json`) + round-robin cursor |
 | `src/login.mjs` | `desktop_auth` exchange + `import-app` |
 | `src/models.mjs` | catalog + fallback model ids |
-| `src/upstream.mjs` | forced-stream upstream request |
+| `src/upstream.mjs` | forced-stream upstream request with rotation/failover |
 | `src/anthropic-to-openai.mjs` | Anthropic request → OpenAI request |
 | `src/openai-to-anthropic.mjs` | OpenAI response → Anthropic response + stop map |
 | `src/stream-aggregate.mjs` | fold SSE into one completion |
 | `src/anthropic-stream.mjs` | OpenAI SSE → Anthropic SSE |
 | `src/http-server.mjs` | routing, guards, handlers |
+| `src/api.mjs` | accounts CRUD/export, login start, usage API |
+| `src/metrics.mjs` | in-memory request/token counters |
+| `src/ui.html` | multi-account control panel (`GET /`) |
 
 ### 4.1 Commands
 
 | command | behaviour |
 |---|---|
 | `serve` (default) | HTTP server on `127.0.0.1:8787` |
-| `login` | the §3.1 flow; binds an ephemeral port, prints + opens the URL, saves `acc.json` |
-| `import-app` | copies `~/.deepai-code/userdata/secrets/deepai-account.bin` → `acc.json` |
-| `whoami` | prints username/isPro/masked key/machine digest |
+| `login` | the §3.1 flow; binds an ephemeral port, prints + opens the URL, adds/updates an account in `acc.json` |
+| `import-app` | copies `~/.deepai-code/userdata/secrets/deepai-account.bin` into the account store |
+| `whoami` | prints every account (masked), rotation cursor, machine digest |
 
 ### 4.2 Environment
 
@@ -264,11 +268,12 @@ client ──POST /v1/messages ──► anthropicToOpenAI ──► upstream (S
 
 Guard order is deliberate (mirrors §3.3):
 
-1. `GET /health`, `GET /v1/models` (always open, local only)
-2. non-POST → 404
-3. `Origin` header present → 403
-4. `PROXY_TOKEN` mismatch → 401
-5. route dispatch
+1. `GET /`, `GET /ui`, `GET /health`, `GET /v1/models` (always open, local only)
+2. `Origin` header present and not loopback (any port) → 403; `OPTIONS` → 204 + CORS
+3. `/api/*` dispatch (account, login, usage)
+4. non-POST → 404
+5. `PROXY_TOKEN` mismatch → 401
+6. `/v1/*` route dispatch
 
 ### 4.5 Anthropic → OpenAI translation (`anthropicToOpenAI`)
 
@@ -347,6 +352,76 @@ Since upstream is forced to stream, a `stream:false` client needs the deltas fol
 Anthropic clients call it before every send. It has no upstream equivalent, so it returns
 `ceil(len(JSON)/4)` — good enough to keep clients happy, never bills Theos.
 
+### 4.10 Web UI and account API
+
+`serve` also hosts a small control panel at `http://127.0.0.1:8787/` (`GET /` or `/ui`). It can:
+
+* start the sign-in flow (`POST /api/login`) and detect completion by polling `GET /health`;
+* finish a sign-in by pasting the callback URL or bare code (`POST /api/login/callback`);
+* scan for and import every desktop app credential (`GET`/`POST /api/capture`);
+* flip rotation on/off (`POST /api/settings`) and read the weighted schedule;
+* change an account's weight (`PATCH /api/accounts/:index`);
+* list accounts with masked keys (`GET /api/accounts`), add/update one or many
+  (`POST /api/accounts`), remove one (`DELETE /api/accounts/:index`) or all (`DELETE /api/accounts`),
+  and export every key (`GET /api/accounts/export`);
+* keep the old single-account routes (`GET`/`POST`/`DELETE /api/account`) for compatibility;
+* show per-process usage counters (`GET /api/usage`): requests, errors, prompt/completion tokens,
+  last model, last request time, last account used, and the next rotation index;
+* send a test chat completion and estimate tokens through the proxy endpoints.
+
+Loopback `Origin` headers (`127.0.0.1`, `localhost`, `::1`, `0.0.0.0`, any port) are accepted,
+including `OPTIONS` preflight with CORS headers, so the panel also works when previewed from
+another local port. Every other origin still gets `403`. Counters live in `src/metrics.mjs` and
+reset on restart.
+
+### 4.11 Multiple accounts, weights and round-robin
+
+`acc.json` stores:
+
+```json
+{
+  "accounts": [ { "apiKey": "...", "username": "...", "isPro": false, "weight": 1 } ],
+  "settings": { "rotation": "round-robin" }
+}
+```
+
+A legacy bare account object or a bare `accounts` array is still read. Duplicate keys update the
+existing entry, so importing the same login twice does not create a second slot.
+
+**Weights.** `weight` is 1–20 (default 1). The store builds a deterministic ring from the weights —
+2:1 gives `A, B, A` — and `nextAccount()` walks it with a cursor, so concurrent requests interleave
+predictably. The ring is cached and rebuilt only when the list or a weight changes, which also
+resets the cursor.
+
+**Toggle.** `settings.rotation` is `"round-robin"` (default) or `"single"`. In `"single"` every
+request uses account #0, which is the escape hatch when one account should take all traffic.
+`GET /api/settings` returns the mode plus the resolved schedule (`order`, `nextIndex`,
+`totalWeight`); the panel draws it as chips with the next slot highlighted.
+
+**Failover.** `src/upstream.mjs` rotates on every upstream request. If the chosen account yields
+`401`, `403`, or `429`, or the network call throws, it discards that response, takes the next
+account, and retries, up to one attempt per stored account; the final response is returned to the
+client with its body intact. The account used for each attempt is recorded as `lastAccount` in
+`GET /api/usage`.
+
+**Auto-capture.** `findAppAccounts()` reads `secrets/deepai-account.bin` and walks up to three
+levels under the userdata folder for any `.json`/`.bin` file carrying an `apiKey`. `serve` runs it
+once on startup when the store is empty, and `captureAfterLogin()` runs it after every successful
+sign-in, so a fresh login also picks up whatever the desktop app had stored.
+
+**Login completion.** The UI flow binds no listener of its own: `startLoginFlow()` registers a state
+and points the `port` parameter at the panel's own port, so the callback lands on
+`GET /auth-callback` of the main server and works through whatever forwarding reaches the panel.
+If the tab still ends on a callback URL, `POST /api/login/callback` accepts the pasted URL or bare
+code and completes the exchange; a pasted state is only used to retire a pending flow, so URLs from
+an older tab or a restarted server still work.
+
+CLI `login`/`import-app` and every UI add/import path go through the same `addAccount()`.
+
+`accountsRevision` in `/health` and `/api/accounts` bumps on every store change. The panel records
+it before login and waits for a change, so re-signing into an account that is already stored is
+also detected as success.
+
 ---
 
 ## 5. Verification performed
@@ -362,7 +437,28 @@ Anthropic clients call it before every send. It has no upstream equivalent, so i
 | `POST /v1/messages` | `content:[{thinking…},{text:"4"}]`, `stop_reason:"end_turn"` |
 | `POST /v1/messages` `stream:true` | `message_start` → `thinking` block → `text` block → `message_stop` |
 | forced `tool_choice:{type:"tool"}` | `{type:"tool_use",name:"get_time",input:{tz:"UTC"}}`, `stop_reason:"tool_use"` |
-| `Origin` header | 403, same as the app |
+| `Origin` header (non-loopback) | 403, same as the app |
+| `Origin` header (loopback) | accepted for the UI |
+| `GET /` (UI) | 200 `text/html`, panel markers present |
+| `GET /api/usage` | counters increment after requests |
+| `POST /api/accounts` round-trip | added=0/updated=1 for the existing key |
+| second account add/remove | count 1→2→1, real account untouched |
+| legacy single-object `acc.json` | read as a one-account store |
+| duplicate `apiKey` | updated in place, never duplicated |
+| rotation unit test | A → B → A → B, cursor advances |
+| weighted ring 2:1 | order `[0,1,0]`, requests used A, B, A, A, B, A |
+| `rotation:"single"` | four requests all used account #0 |
+| toggle back to round-robin | schedule rebuilt, requests resumed A, B, A |
+| weight clamping | 99 → 20, 0 → 1, unknown index → 404 |
+| `GET /api/capture` | `found:0` with no desktop app on this machine |
+| paste validation | empty → 400, garbage → 400, bad code shape → 400 |
+| UI `GET /` | 200, 33 KB, weight steppers + toggle + paste box present |
+| round-robin integration (fake upstream) | four requests used keys A, B, A, B |
+| failover on 401 (fake upstream) | B rejected, same request retried with A, 200 |
+| all accounts rejected | 401 with the final upstream error body |
+| `accountsRevision` | 0 → 1 after add, → 2 after remove |
+| `GET /api/accounts/export` | `{accounts:[...]}` with every stored key |
+| `startLoginFlow()` | auth URL with `state` + `port`, callback closes |
 | machine header on | 400 `"This request is not one DeepAI Code sends."` |
 | machine header off | 200 |
 
@@ -390,13 +486,15 @@ Anthropic clients call it before every send. It has no upstream equivalent, so i
 
 ## 7. Security / operational notes
 
-* `acc.json` is a **plaintext** copy of the account key — the app itself keeps the same key in
+* `acc.json` holds **plaintext** keys, one per stored account — the app itself keeps the same key in
   plaintext at `~/.deepai-code/userdata/secrets/deepai-account.bin`, so this is not a new exposure,
   but it is a real one: treat the file like a password, and `rm acc.json` when done. Prefer `login`
   (fresh exchange) over `import-app` if you don't want a copy at all.
 * The server binds `127.0.0.1` only. `PROXY_TOKEN` exists for the case where something else on the
   machine should not be able to drive your account.
-* Browser `Origin` requests are refused, which kills the obvious CSRF path.
+* Non-loopback browser `Origin` requests are refused, which kills the obvious CSRF path. Loopback
+  origins are accepted so the local panel can call the API; anything already running as your user can
+  read `acc.json` anyway.
 * Every call spends the account's Theos; catalog entries with `theosPerRequest: "0"` are free.
 * Reusing a desktop client's private endpoint from other tools may fall outside DeepAI's terms of
   service — that is a decision for the account holder, not something this script can decide.
@@ -409,7 +507,9 @@ Anthropic clients call it before every send. It has no upstream equivalent, so i
 |---|---|
 | `400 This request is not one DeepAI Code sends.` | `stream`/`stream_options` missing, or machine header sent unregistered |
 | `401 not signed in` | `acc.json` missing/empty → `login` or `import-app` |
-| `403 model transport authentication required` | client sent an `Origin` header |
+| `403 model transport authentication required` | client sent a non-loopback `Origin` header |
+| login tab ends on `/auth-callback` | paste that URL into **Manual sign-in** to finish it |
+| every request `401`/`403`/`429` | all stored accounts were rejected; re-login or add another |
 | `EADDRINUSE` on start | an older `serve` still owns the port — kill the PID from `netstat` |
 | `401`/`429` during `login` | link expired/used or too many attempts — restart `login` |
 | `proxy.log` shows a body you didn't expect | rerun with `DEBUG=1` |

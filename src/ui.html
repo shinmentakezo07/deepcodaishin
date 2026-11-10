@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeepAI Proxy - Control Panel</title>
+<style>
+  :root {
+    --bg: #070b14;
+    --bg2: #0d1526;
+    --card: rgba(17, 25, 40, 0.82);
+    --card2: rgba(24, 34, 53, 0.7);
+    --border: rgba(120, 145, 190, 0.18);
+    --border2: rgba(120, 145, 190, 0.32);
+    --text: #e8edf7;
+    --muted: #8b9ab8;
+    --accent: #4f7dff;
+    --accent2: #7c4dff;
+    --ok: #2fd67a;
+    --warn: #f5b942;
+    --err: #ff5f6d;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    margin: 0;
+    color: var(--text);
+    font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    background:
+      radial-gradient(1100px 620px at 12% -10%, rgba(79, 125, 255, 0.22), transparent 60%),
+      radial-gradient(900px 520px at 92% 0%, rgba(124, 77, 255, 0.18), transparent 55%),
+      linear-gradient(180deg, var(--bg), var(--bg2) 55%, #070b14);
+    background-attachment: fixed;
+  }
+  a { color: #9db9ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header.top {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 14px 22px;
+    background: rgba(7, 11, 20, 0.78);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .logo {
+    width: 34px; height: 34px; border-radius: 10px;
+    background: linear-gradient(140deg, var(--accent), var(--accent2));
+    display: grid; place-items: center;
+    font-weight: 800; font-size: 15px; letter-spacing: -0.5px;
+    box-shadow: 0 6px 20px rgba(79, 125, 255, 0.38);
+  }
+  .brand h1 { margin: 0; font-size: 1.02rem; font-weight: 650; letter-spacing: -0.2px; }
+  .brand small { display: block; color: var(--muted); font-size: 0.74rem; font-weight: 500; }
+  .spacer { flex: 1; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 12px; border-radius: 999px;
+    border: 1px solid var(--border2);
+    background: var(--card2);
+    font-size: 0.79rem; font-weight: 600; color: var(--muted);
+    white-space: nowrap;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .pill.ok { color: var(--ok); border-color: rgba(47, 214, 122, 0.4); }
+  .pill.ok .dot { background: var(--ok); box-shadow: 0 0 9px var(--ok); }
+  .pill.err { color: var(--err); border-color: rgba(255, 95, 109, 0.4); }
+  .pill.err .dot { background: var(--err); box-shadow: 0 0 9px var(--err); }
+
+  main { max-width: 1060px; margin: 0 auto; padding: 22px 20px 60px; display: grid; gap: 18px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px 20px;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 16px 44px rgba(3, 7, 16, 0.42);
+  }
+  .card > h2 {
+    display: flex; align-items: center; gap: 9px;
+    margin: 0 0 14px; font-size: 0.95rem; font-weight: 650; letter-spacing: 0.2px;
+  }
+  .card > h2 .num {
+    width: 21px; height: 21px; border-radius: 7px;
+    background: rgba(79, 125, 255, 0.16); color: #9db9ff;
+    display: grid; place-items: center; font-size: 0.72rem; font-weight: 700;
+  }
+  .card > h2 .grow { flex: 1; }
+
+  button {
+    font: inherit; font-size: 0.87rem; font-weight: 600;
+    padding: 9px 15px; border-radius: 10px; border: 1px solid transparent;
+    background: linear-gradient(140deg, var(--accent), #3d63e0);
+    color: #fff; cursor: pointer;
+    transition: transform 0.12s ease, filter 0.12s ease, opacity 0.12s ease;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.12); transform: translateY(-1px); }
+  button:active:not(:disabled) { transform: translateY(0); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.ghost { background: var(--card2); border-color: var(--border2); color: var(--text); }
+  button.ghost:hover:not(:disabled) { border-color: rgba(120, 145, 190, 0.55); }
+  button.danger { background: rgba(255, 95, 109, 0.14); border-color: rgba(255, 95, 109, 0.42); color: #ff8b94; }
+  button.danger:hover:not(:disabled) { background: rgba(255, 95, 109, 0.22); }
+  button.tiny { padding: 5px 10px; font-size: 0.78rem; border-radius: 8px; }
+
+  input, select, textarea {
+    font: inherit; font-size: 0.88rem; width: 100%;
+    padding: 10px 12px; border-radius: 10px;
+    border: 1px solid var(--border2); background: rgba(7, 11, 20, 0.7); color: var(--text);
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 125, 255, 0.16); }
+  textarea { min-height: 84px; font-family: var(--mono); font-size: 0.82rem; resize: vertical; }
+  label { display: block; margin: 10px 0 6px; font-size: 0.78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
+  .row { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+  .hidden { display: none !important; }
+  .mono { font-family: var(--mono); }
+
+  .msg { margin: 10px 0 0; font-size: 0.83rem; color: var(--muted); word-break: break-word; min-height: 1.1em; }
+  .msg.ok { color: var(--ok); }
+  .msg.err { color: var(--err); }
+
+  /* rotation switch */
+  .switchRow { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+  .track {
+    position: relative; width: 50px; height: 28px; border-radius: 999px;
+    background: rgba(120, 145, 190, 0.24); border: 1px solid var(--border2);
+    transition: background 0.18s ease;
+  }
+  .track .knob {
+    position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
+    background: #fff; transition: transform 0.18s ease;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  }
+  .switch.on .track { background: linear-gradient(140deg, var(--accent), var(--accent2)); border-color: transparent; }
+  .switch.on .track .knob { transform: translateX(22px); }
+  .switchLabel { font-size: 0.88rem; font-weight: 600; }
+  .switchHint { font-size: 0.79rem; color: var(--muted); }
+
+  /* account cards */
+  .acct {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 14px; border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--card2);
+    margin-top: 10px;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+  .acct:hover { border-color: var(--border2); }
+  .acct.next { border-color: rgba(47, 214, 122, 0.55); box-shadow: 0 0 0 1px rgba(47, 214, 122, 0.22) inset; }
+  .acct.idle { opacity: 0.62; }
+  .avatar {
+    width: 36px; height: 36px; border-radius: 10px; flex: 0 0 auto;
+    display: grid; place-items: center; font-weight: 700; font-size: 0.95rem;
+    background: linear-gradient(140deg, rgba(79, 125, 255, 0.55), rgba(124, 77, 255, 0.55));
+    color: #fff; text-transform: uppercase;
+  }
+  .acct .who { flex: 1 1 150px; min-width: 120px; }
+  .acct .who .name { font-weight: 600; font-size: 0.92rem; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .acct .who .key { font-family: var(--mono); font-size: 0.76rem; color: var(--muted); }
+  .tag {
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 6px;
+    border: 1px solid rgba(47, 214, 122, 0.45); color: var(--ok);
+  }
+  .tag.pro { border-color: rgba(245, 185, 66, 0.5); color: var(--warn); }
+  .tag.idx { border-color: var(--border2); color: var(--muted); }
+  .stepper { display: flex; align-items: center; gap: 4px; padding: 3px; border-radius: 9px; border: 1px solid var(--border2); background: rgba(7, 11, 20, 0.6); }
+  .stepper button { padding: 2px 9px; border-radius: 6px; background: transparent; border: none; color: var(--muted); font-size: 1rem; line-height: 1.2; }
+  .stepper button:hover:not(:disabled) { background: rgba(120, 145, 190, 0.18); color: var(--text); transform: none; filter: none; }
+  .stepper .w { min-width: 30px; text-align: center; font-family: var(--mono); font-size: 0.85rem; font-weight: 700; }
+  .stepperLabel { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .order { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .chip {
+    font-family: var(--mono); font-size: 0.74rem; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--border2); background: rgba(79, 125, 255, 0.1); color: #a9c0ff;
+  }
+  .chip.first { border-color: rgba(47, 214, 122, 0.5); color: var(--ok); background: rgba(47, 214, 122, 0.1); }
+
+  /* stats */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; }
+  .stat { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--card2); }
+  .stat .k { font-size: 0.71rem; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); font-weight: 600; }
+  .stat .v { font-size: 1.22rem; font-weight: 700; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .stat .v.small { font-size: 0.92rem; font-weight: 600; font-family: var(--mono); word-break: break-all; }
+  .stat.accent .v { color: #9db9ff; }
+  .stat.warn .v { color: var(--warn); }
+  .stat.err .v { color: var(--err); }
+
+  pre {
+    margin: 10px 0 0; padding: 13px; border-radius: 11px;
+    border: 1px solid var(--border); background: rgba(3, 6, 12, 0.75);
+    font-family: var(--mono); font-size: 0.8rem; line-height: 1.5;
+    max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  .hint { font-size: 0.8rem; color: var(--muted); margin: 8px 0 0; }
+  .divider { height: 1px; background: var(--border); margin: 16px 0; }
+  .authbox { margin-top: 12px; padding: 12px 14px; border-radius: 11px; border: 1px dashed rgba(79, 125, 255, 0.45); background: rgba(79, 125, 255, 0.07); }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.35); border-top-color: #fff; border-radius: 50%; animation: sp 0.7s linear infinite; vertical-align: -1px; margin-right: 6px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <div class="logo">DA</div>
+    <div>
+      <h1>DeepAI Proxy</h1>
+      <small>local gateway control panel</small>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <span id="statusBadge" class="pill"><span class="dot"></span><span id="statusText">checking</span></span>
+  <span id="countBadge" class="pill"><span class="dot"></span><span id="countText">0 accounts</span></span>
+  <span id="modeBadge" class="pill"><span class="dot"></span><span id="modeText">-</span></span>
+</header>
+
+<main>
+  <section class="card">
+    <h2><span class="num">1</span>Rotation<span class="grow"></span><button id="refreshBtn" class="ghost tiny">Refresh</button></h2>
+    <div class="switchRow">
+      <label class="switch" id="rotSwitch">
+        <span class="track"><span class="knob"></span></span>
+        <span>
+          <span class="switchLabel" id="rotLabel">Round-robin</span>
+          <span class="switchHint" id="rotHint">spread requests across every account by weight</span>
+        </span>
+      </label>
+    </div>
+    <div id="orderBox" class="order"></div>
+    <p class="hint" id="orderHint">Turn the switch off to pin every request to the first account.</p>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">2</span>Accounts<span class="grow"></span>
+      <button id="captureBtn" class="ghost tiny">Auto-capture from app</button>
+    </h2>
+    <div id="accountsList"></div>
+    <div class="row" style="margin-top:14px">
+      <button id="loginBtn">Login and add account</button>
+      <button id="exportBtn" class="ghost">Export all</button>
+      <button id="deleteAllBtn" class="danger">Remove all</button>
+    </div>
+    <div id="authBox" class="authbox hidden">
+      <div class="row">
+        <span class="switchHint"><span class="spin"></span>Waiting for sign-in. Finish it in the opened tab.</span>
+      </div>
+      <div style="margin-top:8px;font-size:0.8rem"><a id="authLink" href="#" target="_blank"></a></div>
+    </div>
+    <p id="statusMsg" class="msg"></p>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">3</span>Manual sign-in<span class="grow"></span></h2>
+    <p class="hint" style="margin-top:0">If the login tab ends on a <span class="mono">/auth-callback</span> URL that did not finish, paste that URL (or just the code) here.</p>
+    <textarea id="cbText" placeholder="http://127.0.0.1:8787/auth-callback?code=...&amp;state=..."></textarea>
+    <div class="row" style="margin-top:9px">
+      <button id="cbBtn">Complete sign-in</button>
+      <button id="cbClearBtn" class="ghost">Clear</button>
+    </div>
+    <p id="cbMsg" class="msg"></p>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">4</span>Import / export<span class="grow"></span></h2>
+    <div class="grid2">
+      <div>
+        <label for="accFile">Load a JSON file</label>
+        <input id="accFile" type="file" accept="application/json,.json">
+        <label for="accJson">Or paste accounts</label>
+        <textarea id="accJson" placeholder='{"apiKey":"...","username":"...","isPro":false,"weight":1}'></textarea>
+        <div class="row" style="margin-top:9px"><button id="saveAccBtn">Save accounts</button></div>
+        <p id="accMsg" class="msg"></p>
+      </div>
+      <div>
+        <p class="hint" style="margin-top:0">Accepted: a single account object, an array of accounts, or <span class="mono">{ "accounts": [...] }</span>. Each entry may carry a <span class="mono">weight</span> (1-20). A duplicate key updates the stored entry instead of adding a second one.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">5</span>Usage</h2>
+    <div class="stats">
+      <div class="stat"><div class="k">Uptime</div><div class="v small" id="uptime">-</div></div>
+      <div class="stat accent"><div class="k">Requests</div><div class="v" id="requests">-</div></div>
+      <div class="stat"><div class="k">Chat</div><div class="v" id="reqChat">-</div></div>
+      <div class="stat"><div class="k">Messages</div><div class="v" id="reqMsg">-</div></div>
+      <div class="stat"><div class="k">Token count</div><div class="v" id="reqCount">-</div></div>
+      <div class="stat err"><div class="k">Errors</div><div class="v" id="errors">-</div></div>
+      <div class="stat"><div class="k">Prompt tokens</div><div class="v" id="promptTokens">-</div></div>
+      <div class="stat"><div class="k">Completion</div><div class="v" id="completionTokens">-</div></div>
+      <div class="stat accent"><div class="k">Total tokens</div><div class="v" id="totalTokens">-</div></div>
+      <div class="stat"><div class="k">Last account</div><div class="v small" id="lastAccount">-</div></div>
+      <div class="stat"><div class="k">Last model</div><div class="v small" id="lastModel">-</div></div>
+      <div class="stat"><div class="k">Last request</div><div class="v small" id="lastRequest">-</div></div>
+    </div>
+    <p class="hint">Counters are per server process and reset on restart.</p>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">6</span>Test request<span class="grow"></span><button id="reloadModelsBtn" class="ghost tiny">Reload models</button></h2>
+    <label for="model">Model</label>
+    <select id="model"></select>
+    <label for="prompt">Prompt</label>
+    <textarea id="prompt" placeholder="Say hello in one sentence."></textarea>
+    <div class="row" style="margin-top:9px">
+      <button id="sendBtn">Send chat completion</button>
+      <button id="countBtn" class="ghost">Count tokens</button>
+    </div>
+    <pre id="output">No request yet.</pre>
+  </section>
+</main>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+
+  function api(path, opts) {
+    var init = Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {});
+    return fetch(path, init).then(function (res) {
+      return res.text().then(function (text) {
+        var data;
+        try { data = JSON.parse(text); } catch (e) { data = { raw: text }; }
+        if (!res.ok) {
+          var msg = (data && data.error && data.error.message) || (data && data.message) || ("HTTP " + res.status);
+          var err = new Error(msg);
+          err.status = res.status;
+          err.data = data;
+          throw err;
+        }
+        return data;
+      });
+    });
+  }
+
+  function setMsg(id, text, kind) {
+    var el = $(id);
+    el.textContent = text || "";
+    el.className = "msg" + (kind ? " " + kind : "");
+  }
+
+  function fmtNum(n) {
+    if (typeof n !== "number" || !isFinite(n)) return "-";
+    return n.toLocaleString();
+  }
+
+  function fmtUptime(s) {
+    if (typeof s !== "number") return "-";
+    var h = Math.floor(s / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    return h + "h " + m + "m " + (s % 60) + "s";
+  }
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  var state = {
+    accounts: [],
+    count: 0,
+    settings: { rotation: "round-robin" },
+    rotation: { mode: "round-robin", nextIndex: 0, order: [], totalWeight: 0 },
+    revision: 0
+  };
+
+  // ------------------------------------------------------------ rotation UI
+
+  function renderRotation() {
+    var on = state.settings.rotation !== "single";
+    $("rotSwitch").classList.toggle("on", on);
+    $("rotLabel").textContent = on ? "Round-robin" : "Single account";
+    $("rotHint").textContent = on
+      ? "spread requests across every account by weight"
+      : "every request uses account #0 only";
+    $("modeText").textContent = on ? "round-robin" : "single";
+
+    var box = $("orderBox");
+    box.innerHTML = "";
+    var order = state.rotation.order || [];
+    if (!on || order.length === 0) {
+      $("orderHint").textContent = on
+        ? "Add an account to build the rotation."
+        : "Switch on round-robin to use every account again.";
+      return;
+    }
+    order.forEach(function (index, pos) {
+      var acc = state.accounts[index];
+      var label = acc ? (acc.username || "#" + index) : "#" + index;
+      var chip = el("span", "chip" + (pos === 0 ? " first" : ""), label);
+      chip.title = "position " + (pos + 1) + " of " + order.length;
+      box.appendChild(chip);
+    });
+    var total = state.rotation.totalWeight || 0;
+    $("orderHint").textContent = "Weighted order (" + order.length + " slots, total weight " + total + "). The green chip fires next.";
+  }
+
+  function setRotation(mode) {
+    return api("/api/settings", { method: "POST", body: JSON.stringify({ rotation: mode }) })
+      .then(function (d) {
+        applyAccounts(d);
+        setMsg("statusMsg", mode === "single" ? "Pinned to the first account." : "Round-robin enabled.", "ok");
+      })
+      .catch(function (e) { setMsg("statusMsg", "Could not change rotation: " + e.message, "err"); });
+  }
+
+  // ------------------------------------------------------------ accounts UI
+
+  function applyAccounts(d) {
+    if (!d) return;
+    if (typeof d.count === "number") state.count = d.count;
+    if (Array.isArray(d.accounts)) state.accounts = d.accounts;
+    if (d.settings) state.settings = d.settings;
+    if (d.rotation) state.rotation = d.rotation;
+    if (typeof d.accountsRevision === "number") state.revision = d.accountsRevision;
+    $("countText").textContent = state.count + (state.count === 1 ? " account" : " accounts");
+    renderRotation();
+    renderAccounts();
+  }
+
+  function bumpWeight(index, delta) {
+    var acc = state.accounts[index];
+    if (!acc) return;
+    var next = Math.min(20, Math.max(1, (acc.weight || 1) + delta));
+    if (next === acc.weight) return;
+    api("/api/accounts/" + index, { method: "PATCH", body: JSON.stringify({ weight: next }) })
+      .then(function (d) {
+        applyAccounts(d);
+        setMsg("statusMsg", "Account #" + index + " weight set to " + next + ".", "ok");
+      })
+      .catch(function (e) { setMsg("statusMsg", "Could not set weight: " + e.message, "err"); });
+  }
+
+  function removeAccount(index) {
+    if (!confirm("Remove account #" + index + "?")) return;
+    api("/api/accounts/" + index, { method: "DELETE" })
+      .then(function (d) {
+        applyAccounts(d);
+        setMsg("statusMsg", "Removed account #" + index + ".", "ok");
+        refreshStatus();
+      })
+      .catch(function (e) { setMsg("statusMsg", "Remove failed: " + e.message, "err"); });
+  }
+
+  function renderAccounts() {
+    var wrap = $("accountsList");
+    wrap.innerHTML = "";
+    if (state.accounts.length === 0) {
+      wrap.appendChild(el("p", "hint", "No accounts yet. Use Login, Auto-capture, or paste a JSON file."));
+      return;
+    }
+    var next = state.rotation.nextIndex || 0;
+    var single = state.settings.rotation === "single";
+
+    state.accounts.forEach(function (a) {
+      var isNext = single ? a.index === 0 : a.index === next;
+      var card = el("div", "acct" + (isNext ? " next" : "") + (single && a.index !== 0 ? " idle" : ""));
+
+      var initial = (a.username || "?").trim().charAt(0) || "?";
+      card.appendChild(el("div", "avatar", initial));
+
+      var who = el("div", "who");
+      var name = el("div", "name");
+      name.appendChild(el("span", null, a.username || "unnamed"));
+      name.appendChild(el("span", "tag idx", "#" + a.index));
+      if (a.isPro) name.appendChild(el("span", "tag pro", "pro"));
+      if (isNext) name.appendChild(el("span", "tag", "next"));
+      who.appendChild(name);
+      who.appendChild(el("div", "key", a.maskedKey));
+      card.appendChild(who);
+
+      var step = el("div", "stepper");
+      step.title = "Weight: how many slots this account gets in the rotation";
+      var minus = el("button", null, "-");
+      minus.disabled = (a.weight || 1) <= 1;
+      minus.onclick = function () { bumpWeight(a.index, -1); };
+      var val = el("span", "w", a.weight || 1);
+      var plus = el("button", null, "+");
+      plus.disabled = (a.weight || 1) >= 20;
+      plus.onclick = function () { bumpWeight(a.index, 1); };
+      step.appendChild(minus);
+      step.appendChild(val);
+      step.appendChild(plus);
+      var stepWrap = el("div");
+      stepWrap.appendChild(el("div", "stepperLabel", "weight"));
+      stepWrap.appendChild(step);
+      card.appendChild(stepWrap);
+
+      var rm = el("button", "danger tiny", "Remove");
+      rm.onclick = function () { removeAccount(a.index); };
+      card.appendChild(rm);
+
+      wrap.appendChild(card);
+    });
+  }
+
+  function refreshAccounts() {
+    return api("/api/accounts")
+      .then(function (d) { applyAccounts(d); return d; })
+      .catch(function (e) { setMsg("statusMsg", "Could not load accounts: " + e.message, "err"); return null; });
+  }
+
+  function refreshStatus() {
+    return api("/health")
+      .then(function (h) {
+        var badge = $("statusBadge");
+        badge.className = "pill " + (h.signedIn ? "ok" : "err");
+        $("statusText").textContent = h.signedIn ? "signed in" : "not signed in";
+        if (typeof h.accountCount === "number") {
+          state.count = h.accountCount;
+          $("countText").textContent = h.accountCount + (h.accountCount === 1 ? " account" : " accounts");
+        }
+        return h;
+      })
+      .catch(function (e) {
+        $("statusBadge").className = "pill err";
+        $("statusText").textContent = "proxy offline";
+        setMsg("statusMsg", "Cannot reach proxy: " + e.message, "err");
+        return null;
+      });
+  }
+
+  // ------------------------------------------------------------ usage
+
+  function refreshUsage() {
+    return api("/api/usage")
+      .then(function (u) {
+        $("uptime").textContent = fmtUptime(u.uptimeSeconds);
+        $("requests").textContent = fmtNum(u.requests);
+        $("reqChat").textContent = fmtNum(u.chatRequests);
+        $("reqMsg").textContent = fmtNum(u.messageRequests);
+        $("reqCount").textContent = fmtNum(u.countTokenRequests);
+        $("errors").textContent = fmtNum(u.errors);
+        $("promptTokens").textContent = fmtNum(u.promptTokens);
+        $("completionTokens").textContent = fmtNum(u.completionTokens);
+        $("totalTokens").textContent = fmtNum(u.totalTokens);
+        $("lastAccount").textContent = u.lastAccount || "-";
+        $("lastModel").textContent = u.lastModel || "-";
+        $("lastRequest").textContent = u.lastRequestAt ? new Date(u.lastRequestAt).toLocaleTimeString() : "-";
+        if (typeof u.accountCount === "number" && u.accountCount !== state.count) refreshAccounts();
+        else if (u.rotation && u.rotation.nextIndex !== state.rotation.nextIndex) {
+          state.rotation = u.rotation;
+          renderRotation();
+          renderAccounts();
+        }
+      })
+      .catch(function () {});
+  }
+
+  // ------------------------------------------------------------ login
+
+  var pollTimer = null;
+
+  function stopPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+    $("loginBtn").disabled = false;
+  }
+
+  function pollLogin(beforeRev) {
+    stopPolling();
+    var tries = 0;
+    pollTimer = setInterval(function () {
+      tries += 1;
+      api("/health").then(function (h) {
+        if (h.signedIn && (h.accountsRevision || 0) !== beforeRev) {
+          stopPolling();
+          $("authBox").classList.add("hidden");
+          setMsg("statusMsg", "Sign-in complete. Total accounts: " + h.accountCount + ".", "ok");
+          refreshAccounts();
+          refreshUsage();
+          return;
+        }
+      }).catch(function () {});
+      if (tries >= 150) {
+        stopPolling();
+        setMsg("statusMsg", "Login window timed out. Paste the callback URL below to finish.", "err");
+      }
+    }, 2000);
+  }
+
+  $("loginBtn").onclick = function () {
+    $("loginBtn").disabled = true;
+    setMsg("statusMsg", "Starting login flow...");
+    var beforeRev = state.revision;
+    api("/api/login", { method: "POST", body: "{}" })
+      .then(function (r) {
+        $("authLink").href = r.authUrl;
+        $("authLink").textContent = r.authUrl;
+        $("authBox").classList.remove("hidden");
+        setMsg("statusMsg", "Waiting for sign-in to finish...");
+        window.open(r.authUrl, "_blank");
+        pollLogin(beforeRev);
+      })
+      .catch(function (e) {
+        stopPolling();
+        setMsg("statusMsg", "Could not start login: " + e.message, "err");
+      });
+  };
+
+  $("cbBtn").onclick = function () {
+    var text = $("cbText").value.trim();
+    if (!text) {
+      setMsg("cbMsg", "Paste the callback URL or the code first.", "err");
+      return;
+    }
+    setMsg("cbMsg", "Completing sign-in...");
+    api("/api/login/callback", { method: "POST", body: JSON.stringify({ url: text }) })
+      .then(function (d) {
+        stopPolling();
+        $("authBox").classList.add("hidden");
+        $("cbText").value = "";
+        var extra = "";
+        if (d.capture && d.capture.added) extra = " Captured " + d.capture.added + " app credential(s).";
+        setMsg("cbMsg", "Signed in as " + (d.username || "unknown") + ". Total accounts: " + d.count + "." + extra, "ok");
+        applyAccounts(d);
+        refreshStatus();
+        refreshUsage();
+      })
+      .catch(function (e) {
+        setMsg("cbMsg", "Sign-in failed: " + e.message, "err");
+      });
+  };
+
+  $("cbClearBtn").onclick = function () {
+    $("cbText").value = "";
+    setMsg("cbMsg", "");
+  };
+
+  $("captureBtn").onclick = function () {
+    setMsg("statusMsg", "Scanning the desktop app for credentials...");
+    api("/api/capture", { method: "POST", body: "{}" })
+      .then(function (d) {
+        if (d.found === 0) {
+          setMsg("statusMsg", "No desktop app credential found on this machine.", "err");
+          return;
+        }
+        setMsg("statusMsg", "Found " + d.found + ", added " + d.added + ", updated " + d.updated + ".", "ok");
+        applyAccounts(d);
+        refreshStatus();
+      })
+      .catch(function (e) { setMsg("statusMsg", "Capture failed: " + e.message, "err"); });
+  };
+
+  // ------------------------------------------------------------ import/export
+
+  $("exportBtn").onclick = function () {
+    api("/api/accounts/export")
+      .then(function (data) {
+        var blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "acc.json";
+        a.click();
+        URL.revokeObjectURL(a.href);
+        setMsg("statusMsg", "Exported " + (data.accounts || []).length + " account(s).", "ok");
+      })
+      .catch(function (e) { setMsg("statusMsg", "Export failed: " + e.message, "err"); });
+  };
+
+  $("deleteAllBtn").onclick = function () {
+    if (!confirm("Remove all stored accounts?")) return;
+    api("/api/accounts", { method: "DELETE" })
+      .then(function (d) {
+        applyAccounts(d);
+        setMsg("statusMsg", "All accounts removed.", "ok");
+        refreshStatus();
+      })
+      .catch(function (e) { setMsg("statusMsg", "Remove failed: " + e.message, "err"); });
+  };
+
+  $("accFile").onchange = function () {
+    var f = this.files && this.files[0];
+    if (!f) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      $("accJson").value = String(reader.result || "");
+      setMsg("accMsg", "File loaded. Click Save accounts.", "ok");
+    };
+    reader.onerror = function () { setMsg("accMsg", "Could not read file.", "err"); };
+    reader.readAsText(f);
+  };
+
+  $("saveAccBtn").onclick = function () {
+    var parsed;
+    try {
+      parsed = JSON.parse($("accJson").value || "{}");
+    } catch (e) {
+      setMsg("accMsg", "Invalid JSON: " + e.message, "err");
+      return;
+    }
+    setMsg("accMsg", "Saving...");
+    api("/api/accounts", { method: "POST", body: JSON.stringify(parsed) })
+      .then(function (r) {
+        var extra = (r.errors && r.errors.length) ? (" Skipped: " + r.errors.join("; ")) : "";
+        setMsg("accMsg", "Saved: " + r.added + " added, " + r.updated + " updated. Total " + r.count + "." + extra, "ok");
+        applyAccounts(r);
+        refreshStatus();
+        refreshUsage();
+      })
+      .catch(function (e) { setMsg("accMsg", "Save failed: " + e.message, "err"); });
+  };
+
+  // ------------------------------------------------------------ test
+
+  function loadModels() {
+    return api("/v1/models")
+      .then(function (m) {
+        var sel = $("model");
+        sel.innerHTML = "";
+        (m.data || []).forEach(function (x) {
+          var o = document.createElement("option");
+          o.value = x.id;
+          o.textContent = x.id;
+          sel.appendChild(o);
+        });
+        if (!sel.options.length) {
+          var o2 = document.createElement("option");
+          o2.value = "";
+          o2.textContent = "no models";
+          sel.appendChild(o2);
+        }
+      })
+      .catch(function (e) { setMsg("statusMsg", "Could not load models: " + e.message, "err"); });
+  }
+
+  $("sendBtn").onclick = function () {
+    var model = $("model").value;
+    var prompt = $("prompt").value.trim();
+    if (!model || !prompt) {
+      $("output").textContent = "Select a model and enter a prompt.";
+      return;
+    }
+    $("output").textContent = "Sending through the rotation...";
+    api("/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({ model: model, messages: [{ role: "user", content: prompt }], stream: false })
+    })
+      .then(function (r) {
+        $("output").textContent = JSON.stringify(r, null, 2);
+        refreshUsage();
+      })
+      .catch(function (e) {
+        $("output").textContent = "Error: " + e.message + "\n" + JSON.stringify(e.data || {}, null, 2);
+        refreshUsage();
+      });
+  };
+
+  $("countBtn").onclick = function () {
+    var prompt = $("prompt").value.trim();
+    if (!prompt) {
+      $("output").textContent = "Enter text to estimate tokens.";
+      return;
+    }
+    api("/v1/messages/count_tokens", {
+      method: "POST",
+      body: JSON.stringify({ messages: [{ role: "user", content: prompt }] })
+    })
+      .then(function (r) { $("output").textContent = JSON.stringify(r, null, 2); refreshUsage(); })
+      .catch(function (e) { $("output").textContent = "Error: " + e.message; });
+  };
+
+  $("rotSwitch").onclick = function () {
+    setRotation(state.settings.rotation === "single" ? "round-robin" : "single");
+  };
+
+  $("refreshBtn").onclick = function () {
+    refreshStatus();
+    refreshAccounts();
+    refreshUsage();
+  };
+
+  $("reloadModelsBtn").onclick = loadModels;
+
+  refreshStatus().then(refreshAccounts).then(function () {
+    refreshUsage();
+    loadModels();
+  });
+  setInterval(refreshUsage, 5000);
+</script>
+</body>
+</html>

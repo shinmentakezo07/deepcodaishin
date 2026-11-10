@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { STOP_MAP } from "./openai-to-anthropic.mjs";
+import { recordUsage } from "./metrics.mjs";
 
 function sseChunk(text) {
   return `event: ${text.event}\ndata: ${JSON.stringify(text.data)}\n\n`;
@@ -173,6 +174,7 @@ function openAIToAnthropicStream(upstreamBody, model, res) {
           delta: { stop_reason: STOP_MAP[finish] || "end_turn", stop_sequence: null },
           usage: { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens },
         });
+        recordUsage(usage, model);
         write("message_stop", { type: "message_stop" });
       } catch (err) {
         write("error", { type: "error", error: { type: "api_error", message: String(err?.message || err) } });

@@ -79,4 +79,33 @@ async function aggregateStream(body, model) {
   return out;
 }
 
-export { aggregateStream };
+
+
+/**
+ * Forward an SSE stream unchanged while parsing usage frames.
+ * onUsage(usage, model) is called for every frame that carries usage.
+ */
+async function* tapStreamUsage(body, onUsage) {
+  const dec = new TextDecoder();
+  let buf = "";
+  for await (const chunk of body) {
+    buf += dec.decode(chunk, { stream: true });
+    buf = buf.replace(/\r\n/g, "\n");
+    let split;
+    while ((split = buf.indexOf("\n\n")) !== -1) {
+      const raw = buf.slice(0, split);
+      buf = buf.slice(split + 2);
+      const line = raw.split("\n").find((l) => l.startsWith("data:"));
+      if (!line) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      try {
+        const json = JSON.parse(data);
+        if (json?.usage) onUsage(json.usage, json.model);
+      } catch {}
+    }
+    yield chunk;
+  }
+}
+
+export { aggregateStream, tapStreamUsage };

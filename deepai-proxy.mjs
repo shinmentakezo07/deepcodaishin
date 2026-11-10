@@ -25,7 +25,7 @@
  *   X-Session-Affinity: <optional, from request>
  *
  * Usage:
- *   node deepai-proxy.mjs login          # browser sign-in -> acc.json
+ *   node deepai-proxy.mjs login          # browser sign-in -> add account to acc.json
  *   node deepai-proxy.mjs import-app     # copy the desktop app's stored credential
  *   node deepai-proxy.mjs serve          # start proxy on 127.0.0.1:8787
  *   node deepai-proxy.mjs whoami
@@ -33,7 +33,7 @@
  */
 
 import { MACHINE_HEADER } from "./src/fingerprint.mjs";
-import { requireAccount } from "./src/account.mjs";
+import { loadAccounts, maskKey, rotationState } from "./src/account.mjs";
 import { login, importApp } from "./src/login.mjs";
 import { startServer } from "./src/http-server.mjs";
 
@@ -43,11 +43,23 @@ const cmd = process.argv[2] || "serve";
 if (cmd === "login") await login();
 else if (cmd === "import-app") importApp();
 else if (cmd === "whoami") {
-  const a = requireAccount();
-  console.log(JSON.stringify({ ...a, apiKey: `${a.apiKey.slice(0, 8)}…(${a.apiKey.length} chars)` }, null, 2));
-  console.log(`machine header: ${MACHINE_HEADER || "(unavailable)"}`);
+  const accounts = loadAccounts();
+  if (accounts.length === 0) {
+    console.error("no credential stored — run login, import-app, or use the UI");
+    process.exit(1);
+  }
+  console.log(JSON.stringify({
+    accounts: accounts.map((a, index) => ({
+      index,
+      username: a.username,
+      isPro: a.isPro,
+      apiKey: maskKey(a.apiKey) + " (" + a.apiKey.length + " chars)",
+    })),
+    rotation: rotationState(),
+    machineHeader: MACHINE_HEADER || "(unavailable)",
+  }, null, 2));
 } else if (cmd === "serve") startServer();
 else {
-  console.error(`unknown command: ${cmd}\ncommands: login | import-app | serve | whoami`);
+  console.error("unknown command: " + cmd + "\ncommands: login | import-app | serve | whoami");
   process.exit(1);
 }
