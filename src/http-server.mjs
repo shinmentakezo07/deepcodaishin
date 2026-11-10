@@ -499,6 +499,13 @@ function startServer() {
     }
   });
 
+  // Keep client sockets warm. Node closes an idle keep-alive connection after
+  // 5s by default, which is shorter than the pause between turns in most chat
+  // clients, so every turn would pay a fresh TCP handshake to the panel or the
+  // SDK. headersTimeout must stay above keepAliveTimeout.
+  server.keepAliveTimeout = Math.max(1000, Number(process.env.KEEPALIVE_TIMEOUT_MS || 65000));
+  server.headersTimeout = server.keepAliveTimeout + 1000;
+
   server.listen(PORT, HOST, () => {
     console.log(`deepai-proxy listening on http://${HOST}:${PORT}`);
     console.log("  UI       : http://127.0.0.1:" + PORT + "/");
