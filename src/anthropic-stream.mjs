@@ -158,9 +158,13 @@ function openAIToAnthropicStream(upstreamBody, model, res) {
   return new Promise((resolve) => {
     void (async () => {
       try {
+        let stopped = false;
         for await (const chunk of upstreamBody) {
           // Stop pulling from upstream the moment the caller is gone.
-          if (res.writableEnded || res.destroyed) break;
+          if (res.writableEnded || res.destroyed) {
+            stopped = true;
+            break;
+          }
           const text = dec.decode(chunk, { stream: true });
           buf += text;
           if (buf.includes("\r")) buf = buf.replace(/\r\n/g, "\n");
@@ -179,6 +183,18 @@ function openAIToAnthropicStream(upstreamBody, model, res) {
           if (needDrain) {
             needDrain = false;
             await drained();
+          }
+        }
+        // Flush a last frame that arrived without its terminating blank line.
+        if (!stopped) {
+          buf += dec.decode();
+          for (const line of buf.split("\n")) {
+            if (!line.startsWith("data:")) continue;
+            const data = line.slice(5).trim();
+            if (!data || data === "[DONE]") continue;
+            try {
+              handleChunk(JSON.parse(data));
+            } catch {}
           }
         }
         ensureStart({ prompt_tokens: usage.input_tokens });

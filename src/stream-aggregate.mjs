@@ -28,11 +28,20 @@ async function aggregateStream(body, model) {
     if (json?.id) out.id = json.id;
     if (json?.model) out.model = json.model;
     if (json?.usage) {
+      // Merge, do not replace: a stream may report prompt tokens in one frame
+      // and completion tokens in another, and replacing would zero the first.
+      const u = json.usage;
+      const prompt = u.prompt_tokens ?? out.usage.prompt_tokens;
+      const completion = u.completion_tokens ?? out.usage.completion_tokens;
       out.usage = {
-        prompt_tokens: json.usage.prompt_tokens ?? 0,
-        completion_tokens: json.usage.completion_tokens ?? 0,
-        total_tokens: json.usage.total_tokens ?? 0,
-        ...(json.usage.prompt_tokens_details ? { prompt_tokens_details: json.usage.prompt_tokens_details } : {}),
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        total_tokens: u.total_tokens ?? prompt + completion,
+        ...(u.prompt_tokens_details
+          ? { prompt_tokens_details: u.prompt_tokens_details }
+          : out.usage.prompt_tokens_details
+            ? { prompt_tokens_details: out.usage.prompt_tokens_details }
+            : {}),
       };
     }
     const ch = json?.choices?.[0];
@@ -74,6 +83,19 @@ async function aggregateStream(body, model) {
     }
   }
 
+  // The last frame often arrives without its terminating blank line, and it is
+  // exactly the frame that carries finish_reason and usage. Flush the decoder
+  // and parse whatever is left instead of dropping it.
+  buf += dec.decode();
+  for (const line of buf.split("\n")) {
+    if (!line.startsWith("data:")) continue;
+    const data = line.slice(5).trim();
+    if (!data || data === "[DONE]") continue;
+    try {
+      handle(JSON.parse(data));
+    } catch {}
+  }
+
   if (tools.size) msg.tool_calls = [...tools.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
   if (!msg.content) msg.content = null;
   if (!out.choices[0].finish_reason) out.choices[0].finish_reason = tools.size ? "tool_calls" : "stop";
@@ -112,6 +134,18 @@ async function* tapStreamUsage(body, onUsage) {
       } catch {}
     }
     yield chunk;
+  }
+
+  // A final frame with no trailing blank line still counts.
+  buf += dec.decode();
+  for (const line of buf.split("\n")) {
+    if (!line.startsWith("data:")) continue;
+    const data = line.slice(5).trim();
+    if (!data || data === "[DONE]" || !data.includes('"usage"')) continue;
+    try {
+      const json = JSON.parse(data);
+      if (json?.usage) onUsage(json.usage, json.model);
+    } catch {}
   }
 }
 

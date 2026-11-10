@@ -396,6 +396,82 @@ async function handleMessages(req, res, account) {
   }
 }
 
+// CJK and other wide scripts are roughly one token per character, latin text
+// roughly four characters per token.
+const WIDE_CHAR = /[\u1100-\u11ff\u2e80-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\ua960-\ua97f\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/g;
+
+/**
+ * Approximate the input token count of an Anthropic request.
+ *
+ * There is no tokenizer here and no upstream call, so this walks the same
+ * fields the request is translated from — system, message content blocks and
+ * tool definitions — instead of stringifying the whole body. Stringifying
+ * counted JSON punctuation, dropped tool schemas and counted base64 image data
+ * as text, which is why a tools-heavy request used to be badly underestimated.
+ */
+function estimateInputTokens(input) {
+  let chars = 0;
+  let wide = 0;
+  let messages = 0;
+
+  const addText = (value) => {
+    if (typeof value !== "string" || !value) return;
+    const hits = value.match(WIDE_CHAR);
+    if (hits) wide += hits.length;
+    chars += value.length;
+  };
+
+  const addContent = (content) => {
+    if (typeof content === "string") return addText(content);
+    if (!Array.isArray(content)) return;
+    for (const block of content) {
+      if (!block || typeof block !== "object") continue;
+      switch (block.type) {
+        case "text":
+          addText(block.text);
+          break;
+        case "thinking":
+          addText(block.thinking);
+          break;
+        case "image":
+          chars += 1600; // a fixed per-image cost instead of counting base64
+          break;
+        case "document":
+          chars += 800;
+          break;
+        case "tool_use":
+          addText(block.name);
+          if (block.input !== undefined) addText(JSON.stringify(block.input));
+          break;
+        case "tool_result":
+          addContent(block.content);
+          break;
+        default:
+          addText(block.text);
+      }
+    }
+  };
+
+  if (input && input.system) addContent(input.system);
+  for (const message of Array.isArray(input && input.messages) ? input.messages : []) {
+    messages += 1;
+    addContent(message && message.content);
+  }
+  if (Array.isArray(input && input.tools)) {
+    for (const tool of input.tools) {
+      if (!tool || typeof tool !== "object") continue;
+      addText(tool.name);
+      addText(tool.description);
+      if (tool.input_schema) addText(JSON.stringify(tool.input_schema));
+    }
+  }
+  if (input && input.tool_choice) addText(JSON.stringify(input.tool_choice));
+
+  const narrow = Math.max(0, chars - wide);
+  // Per-message framing plus the request's own priming tokens.
+  return Math.ceil(narrow / 4) + wide + messages * 4 + 3;
+}
+
 function handleCountTokens(req, res, raw) {
   let input;
   try {
@@ -404,9 +480,7 @@ function handleCountTokens(req, res, raw) {
     return json(res, 400, errBody("invalid JSON body", "invalid_request_error"));
   }
   recordRequest("count_tokens");
-  // Rough estimate: ~4 chars/token plus per-message overhead. No upstream call.
-  const text = JSON.stringify(input.messages || "") + JSON.stringify(input.system || "");
-  json(res, 200, { input_tokens: Math.max(1, Math.ceil(text.length / 4)) });
+  json(res, 200, { input_tokens: estimateInputTokens(input) });
 }
 
 function startServer() {
