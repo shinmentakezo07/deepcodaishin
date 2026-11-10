@@ -120,8 +120,38 @@ function normalize(raw) {
 }
 
 let namesMigrated = false;
+let storeCache = null;
+let storeCacheSig = "";
+let storeCacheCheckedAt = 0;
+
+// How long a cached store is trusted without re-stat'ing the files. A request
+// touches the store several times (health, rotation, settings, account lookup);
+// within the window those all become a Date.now() compare instead of two
+// statSync syscalls. An edit made by another process (the CLI) is picked up
+// after at most this long.
+const STORE_CACHE_TTL_MS = Math.max(0, Number(process.env.STORE_CACHE_TTL_MS ?? 250));
+
+function markStoreChecked() {
+  storeCacheCheckedAt = Date.now();
+}
+
+function storeMtimeSignature() {
+  let sig = "";
+  for (const p of [ACCOUNTS_PATH, ACC_PATH]) {
+    try {
+      sig += p + ":" + fs.statSync(p).mtimeMs + ";";
+    } catch {
+      sig += p + ":0;";
+    }
+  }
+  return sig;
+}
 
 function loadStore() {
+  if (storeCache && Date.now() - storeCacheCheckedAt < STORE_CACHE_TTL_MS) return storeCache;
+  const sig = storeMtimeSignature();
+  markStoreChecked();
+  if (storeCache && storeCacheSig === sig) return storeCache;
   const raw = readRaw();
   const store = normalize(raw);
   // Persist derived names once, so a later reorder cannot rename an account.
@@ -135,6 +165,9 @@ function loadStore() {
       } catch {}
     }
   }
+  storeCache = store;
+  storeCacheSig = storeMtimeSignature();
+  markStoreChecked();
   return store;
 }
 
@@ -156,7 +189,11 @@ function saveStore(store) {
     fs.rmSync(target, { force: true });
     if (target === ACCOUNTS_PATH) fs.rmSync(ACC_PATH, { force: true });
     resetRotation();
-    return { accounts: [], settings };
+    const empty = { accounts: [], settings };
+    storeCache = empty;
+    storeCacheSig = storeMtimeSignature();
+    markStoreChecked();
+    return empty;
   }
 
   const active = accounts.find((a) => a.name === settings.active) || accounts[0];
@@ -173,7 +210,11 @@ function saveStore(store) {
     // Keep the legacy single-account path readable.
     writeJson(ACC_PATH, { apiKey: active.apiKey, username: active.username, isPro: active.isPro });
   }
-  return { accounts, settings: payload.settings };
+  const out = { accounts, settings: payload.settings };
+  storeCache = out;
+  storeCacheSig = storeMtimeSignature();
+  markStoreChecked();
+  return out;
 }
 
 function writeJson(file, data) {
@@ -247,21 +288,36 @@ function setActive(name) {
  *   64 hex chars   -> used verbatim
  *   any other text -> sha256(text)
  */
+const machineIdCache = new Map();
 function accountMachineId(account, localDigest) {
   const raw = account && account.machineId;
-  if (raw === "local") return localDigest || null;
-  if (raw && HEX64.test(raw)) return raw;
-  if (raw) return crypto.createHash("sha256").update(raw).digest("hex");
-  const seed = "deepai-proxy:" + ((account && account.name) || "default");
-  return crypto.createHash("sha256").update(seed).digest("hex");
+  const key = String((account && account.name) || "") + "\u0000" + String(raw || "") + "\u0000" + String(localDigest || "");
+  const cached = machineIdCache.get(key);
+  if (cached !== undefined) return cached;
+  let result;
+  if (raw === "local") result = localDigest || null;
+  else if (raw && HEX64.test(raw)) result = raw;
+  else if (raw) result = crypto.createHash("sha256").update(raw).digest("hex");
+  else {
+    const seed = "deepai-proxy:" + ((account && account.name) || "default");
+    result = crypto.createHash("sha256").update(seed).digest("hex");
+  }
+  machineIdCache.set(key, result);
+  return result;
 }
 
 /** UUID-shaped affinity so session stickiness survives a restart. */
+const affinityCache = new Map();
 function accountAffinity(account) {
   if (account && account.affinity) return account.affinity;
+  const key = String((account && account.name) || "") + "\u0000" + String((account && account.apiKey) || "");
+  const cached = affinityCache.get(key);
+  if (cached !== undefined) return cached;
   const seed = "deepai-proxy-affinity:" + ((account && account.name) || "default") + ":" + ((account && account.apiKey) || "");
   const h = crypto.createHash("sha256").update(seed).digest("hex");
-  return h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20, 32);
+  const result = h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20, 32);
+  affinityCache.set(key, result);
+  return result;
 }
 
 // ---------------------------------------------------------------- mutations
@@ -269,7 +325,7 @@ function accountAffinity(account) {
 function addAccount(acc) {
   if (!validAccount(acc)) throw Object.assign(new Error("invalid account"), { status: 400 });
   const store = loadStore();
-  const list = store.accounts;
+  const list = [...store.accounts]; // copy: the cached store must not be mutated before the save succeeds
   const existing = list.findIndex((x) => x.apiKey === acc.apiKey);
   let added = false;
   let record;
@@ -303,7 +359,8 @@ function addAccount(acc) {
 
 function updateAccount(index, patch) {
   const store = loadStore();
-  const list = store.accounts;
+  const list = [...store.accounts];
+  const settings = { ...store.settings };
   if (!Number.isInteger(index) || index < 0 || index >= list.length) return null;
   const current = list[index];
   const next = { ...current };
@@ -313,7 +370,7 @@ function updateAccount(index, patch) {
     const wanted = cleanName(patch.name);
     if (wanted && wanted !== current.name) {
       next.name = uniqueName(list, wanted, current.apiKey);
-      if (store.settings.active === current.name) store.settings.active = next.name;
+      if (settings.active === current.name) settings.active = next.name;
     }
   }
   if (patch.machineId !== undefined) {
@@ -323,19 +380,20 @@ function updateAccount(index, patch) {
     next.affinity = typeof patch.affinity === "string" && patch.affinity ? patch.affinity : undefined;
   }
   list[index] = next;
-  saveStore({ accounts: list, settings: store.settings });
+  saveStore({ accounts: list, settings });
   return next;
 }
 
 function removeAccountAt(index) {
   const store = loadStore();
-  const list = store.accounts;
+  const list = [...store.accounts];
+  const settings = { ...store.settings };
   if (!Number.isInteger(index) || index < 0 || index >= list.length) return null;
   const removed = list.splice(index, 1)[0];
-  if (store.settings.active === removed.name) {
-    store.settings.active = list[0] ? list[0].name : "";
+  if (settings.active === removed.name) {
+    settings.active = list[0] ? list[0].name : "";
   }
-  saveStore({ accounts: list, settings: store.settings });
+  saveStore({ accounts: list, settings });
   return removed;
 }
 

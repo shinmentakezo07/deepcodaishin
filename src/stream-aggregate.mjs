@@ -57,8 +57,9 @@ async function aggregateStream(body, model) {
   };
 
   for await (const chunk of body) {
-    buf += dec.decode(chunk, { stream: true });
-    buf = buf.replace(/\r\n/g, "\n");
+    const text = dec.decode(chunk, { stream: true });
+    buf += text;
+    if (buf.includes("\r")) buf = buf.replace(/\r\n/g, "\n");
     let split;
     while ((split = buf.indexOf("\n\n")) !== -1) {
       const raw = buf.slice(0, split);
@@ -89,8 +90,9 @@ async function* tapStreamUsage(body, onUsage) {
   const dec = new TextDecoder();
   let buf = "";
   for await (const chunk of body) {
-    buf += dec.decode(chunk, { stream: true });
-    buf = buf.replace(/\r\n/g, "\n");
+    const text = dec.decode(chunk, { stream: true });
+    buf += text;
+    if (buf.includes("\r")) buf = buf.replace(/\r\n/g, "\n");
     let split;
     while ((split = buf.indexOf("\n\n")) !== -1) {
       const raw = buf.slice(0, split);
@@ -99,6 +101,11 @@ async function* tapStreamUsage(body, onUsage) {
       if (!line) continue;
       const data = line.slice(5).trim();
       if (!data || data === "[DONE]") continue;
+      // Only the final frame carries usage, so parse just the frames that can
+      // possibly have it: one JSON.parse + object per token becomes one per
+      // stream. The check is on the raw text, where a content string can only
+      // contain \"usage\" (escaped), which never matches.
+      if (!data.includes('"usage"')) continue;
       try {
         const json = JSON.parse(data);
         if (json?.usage) onUsage(json.usage, json.model);

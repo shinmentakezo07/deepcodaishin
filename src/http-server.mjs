@@ -247,6 +247,51 @@ function authorized(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+function isAbortError(err, signal) {
+  return (err && err.name === "AbortError") || (signal && signal.aborted);
+}
+
+/** Resolve when the socket drains, or straight away if the peer went away. */
+function drained(res) {
+  return new Promise((resolve) => {
+    const done = () => {
+      res.off("drain", done);
+      res.off("close", done);
+      resolve();
+    };
+    res.on("drain", done);
+    res.on("close", done);
+  });
+}
+
+/**
+ * Abort the upstream call when the caller hangs up.
+ *
+ * Without this a cancelled stream keeps consuming the account's Theos to the
+ * last token, and a cancelled non-stream request keeps the upstream body open
+ * for a response nobody will read.
+ */
+function clientAbort(res) {
+  const ac = new AbortController();
+  const onClose = () => {
+    if (!res.writableEnded) ac.abort();
+  };
+  res.on("close", onClose);
+  return { signal: ac.signal, dispose: () => res.off("close", onClose) };
+}
+
+/** Open an SSE response: headers now, token-sized frames without Nagle delay. */
+function beginEventStream(res) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-store",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
+  if (res.socket && typeof res.socket.setNoDelay === "function") res.socket.setNoDelay(true);
+}
+
 async function handleChatCompletions(req, res, account) {
   const raw = await readBody(req);
   let payload;
@@ -264,45 +309,39 @@ async function handleChatCompletions(req, res, account) {
   // Upstream is always streamed; the client may still ask for a single JSON body.
   const wantsStream = payload.stream === true;
   const affinity = req.headers["x-session-affinity"] || payload.prompt_cache_key || undefined;
-  const up = await upstreamFetch(payload, { affinity, account });
+  const abort = clientAbort(res);
 
-  if (!up.ok) {
-    recordError();
-    const text = await up.text().catch(() => "");
-    return json(res, up.status, {
-      error: {
-        message: upstreamErrorMessage(up.status, text, account ? account.name : undefined),
-        type: "upstream_error",
-        code: "upstream_" + up.status,
-      },
-    });
-  }
-
-  if (!wantsStream) {
-    const agg = await aggregateStream(up.body, payload.model);
-    recordUsage(agg.usage, payload.model);
-    return json(res, 200, agg);
-  }
-
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream; charset=utf-8",
-    "Cache-Control": "no-store",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
-  });
-  let closed = false;
-  const onClose = () => {
-    closed = true;
-  };
-  res.on("close", onClose);
   try {
-    for await (const chunk of tapStreamUsage(up.body, (usage, model) => recordUsage(usage, model || payload.model))) {
-      if (closed) break;
-      if (!res.write(chunk)) await new Promise((r) => res.once("drain", r));
+    const up = await upstreamFetch(payload, { affinity, account, signal: abort.signal });
+
+    if (!up.ok) {
+      recordError();
+      const text = await up.text().catch(() => "");
+      return json(res, up.status, {
+        error: {
+          message: upstreamErrorMessage(up.status, text, account ? account.name : undefined),
+          type: "upstream_error",
+          code: "upstream_" + up.status,
+        },
+      });
     }
+
+    if (!wantsStream) {
+      const agg = await aggregateStream(up.body, payload.model);
+      recordUsage(agg.usage, payload.model);
+      return json(res, 200, agg);
+    }
+
+    beginEventStream(res);
+    for await (const chunk of tapStreamUsage(up.body, (usage, model) => recordUsage(usage, model || payload.model))) {
+      if (res.destroyed || res.writableEnded) break;
+      if (!res.write(chunk)) await drained(res);
+    }
+  } catch (err) {
+    if (!isAbortError(err, abort.signal)) throw err;
   } finally {
-    res.off("close", onClose);
-    if (!res.writableEnded) res.end();
+    abort.dispose();
+    if (res.headersSent && !res.writableEnded) res.end();
   }
 }
 
@@ -322,32 +361,39 @@ async function handleMessages(req, res, account) {
 
   const wantsStream = input.stream === true;
   const upstreamReq = anthropicToOpenAI(input);
+  const abort = clientAbort(res);
 
-  const up = await upstreamFetch(upstreamReq, { affinity: req.headers["x-session-affinity"], account });
+  try {
+    const up = await upstreamFetch(upstreamReq, {
+      affinity: req.headers["x-session-affinity"],
+      account,
+      signal: abort.signal,
+    });
 
-  if (!up.ok) {
-    recordError();
-    const text = await up.text().catch(() => "");
-    return json(
-      res,
-      up.status,
-      errBody(upstreamErrorMessage(up.status, text, account ? account.name : undefined), "upstream_error"),
-    );
+    if (!up.ok) {
+      recordError();
+      const text = await up.text().catch(() => "");
+      return json(
+        res,
+        up.status,
+        errBody(upstreamErrorMessage(up.status, text, account ? account.name : undefined), "upstream_error"),
+      );
+    }
+
+    if (!wantsStream) {
+      const body = await aggregateStream(up.body, input.model);
+      recordUsage(body.usage, input.model);
+      return json(res, 200, openAIToAnthropic(body, input.model));
+    }
+
+    beginEventStream(res);
+    await openAIToAnthropicStream(up.body, input.model, res);
+  } catch (err) {
+    if (!isAbortError(err, abort.signal)) throw err;
+  } finally {
+    abort.dispose();
+    if (res.headersSent && !res.writableEnded) res.end();
   }
-
-  if (!wantsStream) {
-    const body = await aggregateStream(up.body, input.model);
-    recordUsage(body.usage, input.model);
-    return json(res, 200, openAIToAnthropic(body, input.model));
-  }
-
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream; charset=utf-8",
-    "Cache-Control": "no-store",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
-  });
-  await openAIToAnthropicStream(up.body, input.model, res);
 }
 
 function handleCountTokens(req, res, raw) {

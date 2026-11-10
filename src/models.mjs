@@ -29,13 +29,24 @@ const FALLBACK_MODELS = [
 ];
 
 /** Model ids from the app's generated catalog, if present. */
+let catalogCache = null;
+let catalogMtime = 0;
 function catalogIds() {
+  let mtime = 0;
+  try { mtime = fs.statSync(APP_MODELS_JSON).mtimeMs; } catch {}
+  if (catalogCache && catalogMtime === mtime) return catalogCache;
   try {
     const cfg = JSON.parse(fs.readFileSync(APP_MODELS_JSON, "utf8"));
     const list = cfg?.providers?.deepai?.models;
-    if (Array.isArray(list) && list.length) return list.map((m) => m.id);
+    if (Array.isArray(list) && list.length) {
+      catalogCache = list.map((m) => m.id);
+      catalogMtime = mtime;
+      return catalogCache;
+    }
   } catch {}
-  return FALLBACK_MODELS;
+  catalogCache = FALLBACK_MODELS;
+  catalogMtime = mtime;
+  return catalogCache;
 }
 
 export { FALLBACK_MODELS, catalogIds };

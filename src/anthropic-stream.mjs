@@ -22,13 +22,24 @@ function openAIToAnthropicStream(upstreamBody, model, res) {
   let usage = { input_tokens: 0, output_tokens: 0 };
   let id = `msg_${crypto.randomUUID().replace(/-/g, "")}`;
 
+  // Backpressure: res.write() returns false when the socket buffer is full.
+  // Remembering that and awaiting 'drain' once per upstream chunk keeps memory
+  // flat for a slow client instead of queueing the whole answer in the process.
+  let needDrain = false;
   const write = (event, data) => {
-    if (!res.writableEnded) res.write(sseChunk({ event, data }));
+    if (res.writableEnded || res.destroyed) return;
+    if (!res.write(sseChunk({ event, data }))) needDrain = true;
   };
-  // Helper: abort if client already disconnected
-  const maybeEnd = () => {
-    try { if (res.writableEnded) res.end(); } catch {}
-  };
+  const drained = () =>
+    new Promise((resolve) => {
+      const done = () => {
+        res.off("drain", done);
+        res.off("close", done);
+        resolve();
+      };
+      res.on("drain", done);
+      res.on("close", done);
+    });
 
   const ensureStart = (u) => {
     if (started) return;
@@ -148,8 +159,11 @@ function openAIToAnthropicStream(upstreamBody, model, res) {
     void (async () => {
       try {
         for await (const chunk of upstreamBody) {
-          buf += dec.decode(chunk, { stream: true });
-          buf = buf.replace(/\r\n/g, "\n");
+          // Stop pulling from upstream the moment the caller is gone.
+          if (res.writableEnded || res.destroyed) break;
+          const text = dec.decode(chunk, { stream: true });
+          buf += text;
+          if (buf.includes("\r")) buf = buf.replace(/\r\n/g, "\n");
           let split;
           while ((split = buf.indexOf("\n\n")) !== -1) {
             const raw = buf.slice(0, split);
@@ -161,6 +175,10 @@ function openAIToAnthropicStream(upstreamBody, model, res) {
             try {
               handleChunk(JSON.parse(data));
             } catch {}
+          }
+          if (needDrain) {
+            needDrain = false;
+            await drained();
           }
         }
         ensureStart({ prompt_tokens: usage.input_tokens });

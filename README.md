@@ -124,6 +124,7 @@ path.
 | `DEEPAI_MACHINE_HEADER` | on (`0` disables) | send `X-DeepAI-Code-Machine` |
 | `DEEPAI_MACHINE_ID` | auto | raw id to hash into the machine header |
 | `DEEPAI_SESSION_AFFINITY` | per account | force one affinity value |
+| `STORE_CACHE_TTL_MS` | `250` | how long the parsed account store is reused before the files are re-stat'ed; `0` re-reads on every call |
 | `LOG_REQUESTS` | off | log inbound requests, credentials redacted |
 | `DEBUG` | off | log the exact upstream JSON body |
 | `DEBUG_HEADERS` | off | log the exact outgoing header set, key masked |
