@@ -57,7 +57,10 @@ function prunePendingLogins() {
  * /auth-callback route. The callback returns to the same port as the panel, so
  * it works through whatever forwarding already reaches the panel.
  */
-function startLoginFlow() {
+let pendingName = "";
+
+function startLoginFlow(name) {
+  pendingName = typeof name === "string" ? name : "";
   prunePendingLogins();
   if (pendingLogins.size >= MAX_PENDING_LOGINS) {
     const oldest = [...pendingLogins.entries()].sort((a, b) => a[1] - b[1])[0];
@@ -101,7 +104,8 @@ async function finishLogin(code, state) {
   if (state) pendingLogins.delete(state);
   try {
     const acc = await exchangeCode(code);
-    saveAccount(acc);
+    saveAccount(acc, pendingName || undefined);
+    pendingName = "";
     const capture = captureAfterLogin();
     return { ok: true, status: 200, username: acc.username || "", capture };
   } catch (err) {
@@ -150,7 +154,7 @@ async function completeLoginFromText(input) {
   return finishLogin(code, "");
 }
 
-async function login() {
+async function login(name) {
   const state = crypto.randomBytes(32).toString("hex");
   const server = http.createServer(async (req, res) => {
     let url;
@@ -171,7 +175,7 @@ async function login() {
     }
     try {
       const acc = await exchangeCode(code);
-      saveAccount(acc);
+      saveAccount(acc, name || undefined);
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       res.end("<h2>Signed in</h2><p>You can close this tab and return to the terminal.</p>");
       server.close();
@@ -197,7 +201,7 @@ async function login() {
   openBrowser(authUrl);
 }
 
-function importApp() {
+function importApp(name) {
   let acc;
   try {
     acc = JSON.parse(fs.readFileSync(APP_ACCOUNT_BIN, "utf8"));
@@ -209,7 +213,7 @@ function importApp() {
     console.error("app credential file has no apiKey");
     process.exit(1);
   }
-  saveAccount({ apiKey: acc.apiKey, username: acc.username, isPro: acc.isPro });
+  saveAccount({ apiKey: acc.apiKey, username: acc.username, isPro: acc.isPro }, name || undefined);
 }
 
 export {

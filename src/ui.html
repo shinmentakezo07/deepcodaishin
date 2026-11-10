@@ -236,7 +236,18 @@
       </label>
     </div>
     <div id="orderBox" class="order"></div>
-    <p class="hint" id="orderHint">Turn the switch off to pin every request to the first account.</p>
+    <p class="hint" id="orderHint">Turn the switch off to pin every request to the active account.</p>
+    <div class="divider"></div>
+    <div class="switchRow">
+      <label class="switch" id="machineSwitch">
+        <span class="track"><span class="knob"></span></span>
+        <span>
+          <span class="switchLabel" id="machineLabel">Machine header</span>
+          <span class="switchHint" id="machineHint">send X-DeepAI-Code-Machine with each account's own digest</span>
+        </span>
+      </label>
+    </div>
+    <p class="hint" id="machineState"></p>
   </section>
 
   <section class="card">
@@ -244,6 +255,8 @@
       <button id="captureBtn" class="ghost tiny">Auto-capture from app</button>
     </h2>
     <div id="accountsList"></div>
+    <label for="newName">Name for the next added account (optional)</label>
+    <input id="newName" placeholder="defaults to the username">
     <div class="row" style="margin-top:14px">
       <button id="loginBtn">Login and add account</button>
       <button id="exportBtn" class="ghost">Export all</button>
@@ -374,6 +387,24 @@
 
   // ------------------------------------------------------------ rotation UI
 
+  function renderMachine() {
+    var on = state.settings.sendMachineHeader === true;
+    $("machineSwitch").classList.toggle("on", on);
+    $("machineLabel").textContent = on ? "Machine header on" : "Machine header off";
+    $("machineState").textContent = on
+      ? "Each account presents its own digest. Use Verify per account to confirm the gateway accepts it."
+      : "Requests go out without the digest, which is the safe default. Verify still tests both.";
+  }
+
+  function setMachine(on) {
+    api("/api/settings", { method: "POST", body: JSON.stringify({ sendMachineHeader: on }) })
+      .then(function (d) {
+        applyAccounts(d);
+        setMsg("statusMsg", "Machine header " + (on ? "enabled" : "disabled") + ".", "ok");
+      })
+      .catch(function (e) { setMsg("statusMsg", "Could not change machine header: " + e.message, "err"); });
+  }
+
   function renderRotation() {
     var on = state.settings.rotation !== "single";
     $("rotSwitch").classList.toggle("on", on);
@@ -382,6 +413,7 @@
       ? "spread requests across every account by weight"
       : "every request uses account #0 only";
     $("modeText").textContent = on ? "round-robin" : "single";
+    renderMachine();
 
     var box = $("orderBox");
     box.innerHTML = "";
@@ -439,6 +471,49 @@
       .catch(function (e) { setMsg("statusMsg", "Could not set weight: " + e.message, "err"); });
   }
 
+  function pinAccount(name) {
+    api("/api/settings", { method: "POST", body: JSON.stringify({ active: name }) })
+      .then(function (d) {
+        applyAccounts(d);
+        setMsg("statusMsg", "Active account: " + name + ".", "ok");
+      })
+      .catch(function (e) { setMsg("statusMsg", "Could not pin: " + e.message, "err"); });
+  }
+
+  function verifyAccount(name, btn) {
+    btn.disabled = true;
+    btn.textContent = "Checking";
+    $("output").textContent = "Verifying " + name + "...";
+    api("/api/verify", { method: "POST", body: JSON.stringify({ name: name }) })
+      .then(function (r) {
+        var lines = [];
+        lines.push("account  : " + r.name + "  (" + (r.username || "?") + ", pro=" + r.isPro + ")");
+        lines.push("machine  : " + String(r.machineId).slice(0, 12) + "...  (local source: " + r.machineSource + ")");
+        lines.push("affinity : " + r.affinity);
+        lines.push("");
+        lines.push("headers:");
+        Object.keys(r.headers).forEach(function (k) { lines.push("  " + k + ": " + r.headers[k]); });
+        lines.push("");
+        Object.keys(r.checks).forEach(function (k) {
+          var c = r.checks[k];
+          lines.push(k.padEnd(20) + ": " + c.status + " " + c.detail);
+        });
+        lines.push("");
+        lines.push(r.ok ? "OK - gateway accepts " + r.name : "FAILED - " + r.hint);
+        $("output").textContent = lines.join("\n");
+        setMsg("statusMsg", r.ok ? ("Verify OK for " + r.name + ".") : ("Verify failed for " + r.name + ": " + r.hint), r.ok ? "ok" : "err");
+      })
+      .catch(function (e) {
+        var d = e.data || {};
+        $("output").textContent = "Verify failed: " + e.message + "\n" + JSON.stringify(d.checks || d, null, 2);
+        setMsg("statusMsg", "Verify failed: " + e.message, "err");
+      })
+      .then(function () {
+        btn.disabled = false;
+        btn.textContent = "Verify";
+      });
+  }
+
   function removeAccount(index) {
     if (!confirm("Remove account #" + index + "?")) return;
     api("/api/accounts/" + index, { method: "DELETE" })
@@ -469,12 +544,14 @@
 
       var who = el("div", "who");
       var name = el("div", "name");
-      name.appendChild(el("span", null, a.username || "unnamed"));
+      name.appendChild(el("span", null, a.name || a.username || "unnamed"));
       name.appendChild(el("span", "tag idx", "#" + a.index));
       if (a.isPro) name.appendChild(el("span", "tag pro", "pro"));
       if (isNext) name.appendChild(el("span", "tag", "next"));
+      if (state.settings.active === a.name) name.appendChild(el("span", "tag", "active"));
       who.appendChild(name);
-      who.appendChild(el("div", "key", a.maskedKey));
+      who.appendChild(el("div", "key", a.maskedKey + (a.machineId ? "  machine " + a.machineId + "..." : "")));
+      if (a.username && a.username !== a.name) who.appendChild(el("div", "key", "user " + a.username));
       card.appendChild(who);
 
       var step = el("div", "stepper");
@@ -494,9 +571,20 @@
       stepWrap.appendChild(step);
       card.appendChild(stepWrap);
 
+      var actions = el("div", "row");
+      var pin = el("button", "ghost tiny", state.settings.active === a.name ? "Pinned" : "Pin");
+      pin.disabled = state.settings.active === a.name;
+      pin.title = "Use this account for every request while rotation is off";
+      pin.onclick = function () { pinAccount(a.name); };
+      var check = el("button", "ghost tiny", "Verify");
+      check.title = "Live fingerprint check against the gateway";
+      check.onclick = function () { verifyAccount(a.name, check); };
       var rm = el("button", "danger tiny", "Remove");
       rm.onclick = function () { removeAccount(a.index); };
-      card.appendChild(rm);
+      actions.appendChild(pin);
+      actions.appendChild(check);
+      actions.appendChild(rm);
+      card.appendChild(actions);
 
       wrap.appendChild(card);
     });
@@ -513,7 +601,9 @@
       .then(function (h) {
         var badge = $("statusBadge");
         badge.className = "pill " + (h.signedIn ? "ok" : "err");
-        $("statusText").textContent = h.signedIn ? "signed in" : "not signed in";
+        $("statusText").textContent = h.signedIn
+          ? ("signed in" + (h.activeAccount ? " - " + h.activeAccount : ""))
+          : "not signed in";
         if (typeof h.accountCount === "number") {
           state.count = h.accountCount;
           $("countText").textContent = h.accountCount + (h.accountCount === 1 ? " account" : " accounts");
@@ -591,7 +681,7 @@
     $("loginBtn").disabled = true;
     setMsg("statusMsg", "Starting login flow...");
     var beforeRev = state.revision;
-    api("/api/login", { method: "POST", body: "{}" })
+    api("/api/login", { method: "POST", body: JSON.stringify({ name: $("newName").value.trim() }) })
       .then(function (r) {
         $("authLink").href = r.authUrl;
         $("authLink").textContent = r.authUrl;
@@ -766,6 +856,10 @@
     })
       .then(function (r) { $("output").textContent = JSON.stringify(r, null, 2); refreshUsage(); })
       .catch(function (e) { $("output").textContent = "Error: " + e.message; });
+  };
+
+  $("machineSwitch").onclick = function () {
+    setMachine(state.settings.sendMachineHeader !== true);
   };
 
   $("rotSwitch").onclick = function () {

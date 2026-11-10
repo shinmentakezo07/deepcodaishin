@@ -5,15 +5,22 @@ const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT_DIR = path.dirname(SRC_DIR);
 
 export const ACC_PATH = process.env.ACC_PATH || path.join(ROOT_DIR, "acc.json");
+// Optional second store in the named-account shape used by the src1 build.
+export const ACCOUNTS_PATH = process.env.ACCOUNTS_PATH || path.join(ROOT_DIR, "accounts.json");
+export const ACCOUNT_NAME = process.env.ACCOUNT || "";
 export const PORT = Number(process.env.PORT || 8787);
 export const PROXY_TOKEN = process.env.PROXY_TOKEN || "";
 export const API_ORIGIN = (process.env.DEEPAI_API_ORIGIN || "https://api.deepai.org").replace(/\/+$/, "");
-export const MODEL_BASE = `${API_ORIGIN}/deepai_code`;
+export const MODEL_BASE = API_ORIGIN + "/deepai_code";
 export const LANE_VERSION = 4;
-// The gateway rejects an unregistered digest, so this stays opt-in.
+// Off by default: the local digest is the value the gateway rejected on this
+// machine. Each account still carries its own digest (see account.mjs), so
+// DEEPAI_MACHINE_HEADER=1 sends the account digest instead of the local one.
 export const SEND_MACHINE_HEADER = process.env.DEEPAI_MACHINE_HEADER === "1";
+export const LOG_REQUESTS = process.env.LOG_REQUESTS === "1";
+export const DEBUG_HEADERS = process.env.DEBUG_HEADERS === "1";
 
-// The desktop app's own data folder, used by `import-app` and as a model catalog.
+// The desktop app's own data folder, used by import-app and as a model catalog.
 export const APP_USERDATA =
   process.env.DEEPAI_USERDATA ||
   path.join(process.env.USERPROFILE || process.env.HOME || ".", ".deepai-code", "userdata");

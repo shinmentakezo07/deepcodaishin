@@ -16,8 +16,10 @@ import {
   rotationState,
   findAppAccounts,
   captureAppAccounts,
+  findAccount,
 } from "./account.mjs";
 import { startLoginFlow, completeLoginFromText, pendingStates } from "./login.mjs";
+import { verifyAccount } from "./verify.mjs";
 import { snapshot } from "./metrics.mjs";
 
 // ---------------------------------------------------------------- api routes
@@ -177,6 +179,20 @@ async function handleApi(req, res, url, healthPayload) {
     return json(res, 405, errBody("method not allowed", "invalid_request_error"));
   }
 
+  if (p === "/api/verify" && req.method === "POST") {
+    let input = {};
+    try {
+      const raw = await readBody(req);
+      if (raw) input = JSON.parse(raw);
+    } catch {
+      return json(res, 400, errBody("invalid JSON body", "invalid_request_error"));
+    }
+    const acc = findAccount(input.name || undefined);
+    if (!acc) return json(res, 404, errBody("account not found", "not_found_error"));
+    const report = await verifyAccount(acc);
+    return json(res, report.ok ? 200 : 502, report);
+  }
+
   if (p === "/api/login/callback" && req.method === "POST") {
     let input;
     try {
@@ -252,7 +268,12 @@ async function handleApi(req, res, url, healthPayload) {
 
   if (p === "/api/login" && req.method === "POST") {
     try {
-      const flow = await startLoginFlow();
+      let body = {};
+      try {
+        const raw = await readBody(req);
+        if (raw) body = JSON.parse(raw);
+      } catch {}
+      const flow = await startLoginFlow(body.name);
       return json(res, 200, { started: true, authUrl: flow.authUrl, port: flow.port });
     } catch (err) {
       return json(res, 500, errBody("could not start login: " + err.message));

@@ -1,0 +1,153 @@
+# deepai-proxy
+
+A local HTTP proxy that exposes a **DeepAI Code desktop account** as an OpenAI-compatible and
+Anthropic-compatible endpoint, using the same sign-in flow and the same wire fingerprint as the app.
+
+- OpenAI: `POST /v1/chat/completions`
+- Anthropic: `POST /v1/messages` (streaming and non-streaming), `POST /v1/messages/count_tokens`
+- Discovery: `GET /v1/models`, `GET /health`
+
+No dependencies. Node 18+ (tested on Node 24). Binds `127.0.0.1` only.
+
+Docs:
+
+| file | content |
+|---|---|
+| `HOWIBUILD.md` | how it was reverse-engineered, the real protocol, every design decision, pitfalls, troubleshooting |
+| `DECISIONS.md` | why each choice was made, with the evidence that forced it |
+| `README.md` | this file — usage |
+
+---
+
+## Quick start
+
+```bash
+cd "C:/Users/shinm/.deepai-code/scratch/2026-11-10-hi-7122f857"
+
+node src/main.mjs import-app main   # or: node src/main.mjs login main
+node src/main.mjs verify main       # proves the gateway accepts the fingerprint
+node src/main.mjs serve             # http://127.0.0.1:8787
+```
+
+Then:
+
+```bash
+# OpenAI-style
+curl http://127.0.0.1:8787/v1/chat/completions -H 'content-type: application/json' \
+  -d '{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}]}'
+
+# Anthropic-style
+curl http://127.0.0.1:8787/v1/messages -H 'content-type: application/json' \
+  -d '{"model":"deepseek-v4.1-flash","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'
+```
+
+Point a client at it with `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` or
+`ANTHROPIC_BASE_URL=http://127.0.0.1:8787` and any placeholder API key.
+
+Stop it with `taskkill //F //PID <pid>` (the pid is printed at startup; find it with
+`netstat -ano | grep :8787`).
+
+---
+
+## Commands
+
+| command | what it does |
+|---|---|
+| `serve` *(default)* | start the proxy |
+| `login [name]` | browser sign-in against `api.deepai.org`, saved as account `name` (default `default`) |
+| `import-app [name]` | copy the credential the desktop app already has in `~/.deepai-code/userdata/secrets/deepai-account.bin` |
+| `accounts` | list accounts, active flag, per-account machine digest |
+| `use <name>` | switch the active account |
+| `verify [name]` | print the outgoing headers, call `/theos` + one 8-token streamed chat; exits non-zero on rejection |
+| `whoami [name]` | masked key, machine digest, store path |
+
+---
+
+## Multiple accounts
+
+`accounts.json` (mode 0600) holds all of them; each gets its own machine digest and affinity, so no
+two accounts look like the same machine.
+
+```jsonc
+{
+  "active": "main",
+  "accounts": [
+    { "name": "main",   "apiKey": "…", "username": "…", "isPro": false },
+    { "name": "second", "apiKey": "…", "username": "…", "machineId": "laptop-b" }
+  ]
+}
+```
+
+`machineId` is optional:
+
+| value | digest sent |
+|---|---|
+| *(omitted)* | `sha256("deepai-proxy:" + name)` — stable, distinct per account |
+| `"local"` | the real digest of this computer |
+| 64 hex chars | used verbatim |
+| any other string | `sha256(string)` — seed a machine from a label |
+
+Per-request selection: `?account=<name>` → `x-proxy-account: <name>` → `ACCOUNT=<name>` → `active`.
+
+`acc.json` is kept as a mirror of the active account for anything that reads the old single-account
+path.
+
+> Daily Theos is granted **per machine digest**. Two accounts sharing one digest share one grant pool
+> and look like multi-accounting on one machine — the per-account default exists to keep them separate.
+
+---
+
+## Configuration
+
+| env | default | purpose |
+|---|---|---|
+| `PORT` | `8787` | listen port |
+| `ACCOUNTS_PATH` | `./accounts.json` | multi-account store |
+| `ACC_PATH` | `./acc.json` | mirror of the active account |
+| `ACCOUNT` | `active` from the store | default account |
+| `PROXY_TOKEN` | *(empty)* | require `Authorization: Bearer <token>` |
+| `DEEPAI_API_ORIGIN` | `https://api.deepai.org` | origin override |
+| `DEEPAI_USERDATA` | `~/.deepai-code/userdata` | source for `import-app` and the model catalog |
+| `DEEPAI_MACHINE_HEADER` | on (`0` disables) | send `X-DeepAI-Code-Machine` |
+| `DEEPAI_MACHINE_ID` | auto | raw id to hash into the machine header |
+| `DEEPAI_SESSION_AFFINITY` | per account | force one affinity value |
+| `LOG_REQUESTS` | off | log inbound requests, credentials redacted |
+| `DEBUG` | off | log the exact upstream JSON body |
+| `DEBUG_HEADERS` | off | log the exact outgoing header set, key masked |
+
+---
+
+## Files
+
+```
+deepai-proxy.mjs            original single-file build (reference only; src/ is the live code)
+src/
+├── main.mjs                command dispatch
+├── config.mjs              env + paths
+├── account.mjs             accounts.json store, per-account machine id + affinity
+├── login.mjs               desktop auth flow, exchange, import-app
+├── fingerprint.mjs         lane / instance / machine / affinity headers
+├── models.mjs              catalog ids
+├── upstream.mjs            payload normalisation + upstream fetch
+├── anthropic-to-openai.mjs request translation
+├── openai-to-anthropic.mjs response translation
+├── stream-aggregate.mjs    SSE -> single chat.completion
+├── anthropic-stream.mjs    OpenAI SSE -> Anthropic SSE
+└── verify.mjs              live fingerprint check
+accounts.json               credential store (0600)
+acc.json                    mirror of the active account
+```
+
+---
+
+## Security
+
+- `accounts.json` / `acc.json` contain the account key **in plaintext** (the app stores the same key
+  the same way in `~/.deepai-code/userdata/secrets/deepai-account.bin`). Treat them as passwords;
+  delete them when finished.
+- Loopback bind only. Requests carrying an `Origin` header are refused, exactly like the app, which
+  blocks drive-by browser calls.
+- Add `PROXY_TOKEN` if other local processes should not be able to spend your Theos.
+- Every call is billed to the account. Models with `theosPerRequest: "0"` in the app's catalog are free.
+- Driving a desktop client's private endpoint from other tools may be outside DeepAI's terms of
+  service. That call is yours to make.

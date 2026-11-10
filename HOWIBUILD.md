@@ -1,17 +1,20 @@
-# HOW I BUILT `deepai-proxy.mjs`
+# HOW I BUILT deepai-proxy
 
 A record of how the proxy was reverse-engineered from the DeepAI Code desktop app, what the
-protocol actually is, and why every line of the proxy exists.
+protocol actually is, and what every part of the proxy is for.
+
+Companion docs: **`README.md`** (usage), **`DECISIONS.md`** (why each choice was made, with the
+evidence that forced it). This file is the technical narrative.
 
 Everything below was verified against the installed app on this machine
-(`C:\Users\shinm\AppData\Local\Programs\deepai-code-desktop`, version from 2026-11-10) and by live
+(`C:\Users\shinm\AppData\Local\Programs\deepai-code-desktop`, build dated 2026-11-10) and by live
 calls to the real gateway.
 
 ---
 
 ## 1. The goal
 
-A local Node service that:
+A local single-file Node service that:
 
 1. uses **the same sign-in flow** as the desktop app,
 2. stores the credential in **`acc.json`** and uses that credential for every call,
@@ -136,13 +139,22 @@ Notes carried into the proxy:
 POST https://api.deepai.org/deepai_code/chat/completions
 Content-Type: application/json
 X-DeepAI-Code-Theos: 4
-X-DeepAI-Code-Instance: <32 hex>
-X-DeepAI-Code-Machine: <sha256(machine uuid)>          (see §3.4 — not sent by default)
+X-DeepAI-Code-Instance: <32 hex, per process>
+X-DeepAI-Code-Machine: <sha256(machine id)>
 api-key: <account api key>
-X-Session-Affinity: <optional, [A-Za-z0-9._:-]{1,256}>
+X-Session-Affinity: <stable per process>
 
 {"model":"…","messages":[…],"stream":true,"stream_options":{"include_usage":true}, …}
 ```
+
+Header **order** is the app's bridge order (Content-Type, lane, instance, machine, key, affinity).
+JSON key order follows what `pi` emits: `model, messages, stream, [prompt_cache_key],
+stream_options, [store], max_tokens, temperature, tools, tool_choice, …`.
+
+`X-Session-Affinity` is always present: `pi` sets `sendSessionAffinityHeaders: true` for every DeepAI
+model, so a request without it is one the app never sends. The proxy generates a UUID per process
+(override with `DEEPAI_SESSION_AFFINITY`) and lets a client pass its own via
+`x-session-affinity` or `prompt_cache_key`.
 
 The bridge also accepts `POST /responses` (for `api: "openai-responses"` models), `GET /model-status`,
 and the two tool endpoints `/web_search` and `/find_service`. The proxy implements chat completions
@@ -159,36 +171,107 @@ if (incoming.headers.origin || !timingSafeEqual(incoming.headers.authorization, 
 
 Two consequences that shaped the proxy:
 
-* it **refuses non-loopback browser origins** (blocks drive-by browser calls / CSRF), with a
-  narrow loopback exception for the local control panel,
+* it **refuses any request carrying an `Origin` header** (blocks drive-by browser calls / CSRF),
 * with `PROXY_TOKEN` set it requires `Authorization: Bearer <token>` — same shape, but the token is
   the user's, not a per-process capability.
 
-### 3.4 The machine header — the trap
+### 3.4 The machine header — which id the server actually knows
 
-`X-DeepAI-Code-Machine` is `sha256` of the raw machine identifier, lowercased:
+The source says: try the SMBIOS UUID first, fall back to `MachineGuid`.
 
-| platform | source |
+```js
+if (platform === "win32")
+  return parseSmbiosUUID(await run("powershell", […Win32_ComputerSystemProduct.UUID]))
+      ?? parseMachineGuid(await run("reg", […\\Cryptography /v MachineGuid]));
+```
+
+`X-DeepAI-Code-Machine` is `sha256(lowercased raw id)`, hex. Known placeholder UUIDs (`0000…`,
+`ffff…`, `03000200-0400-0500-0006-000700080009`) are rejected.
+
+**But the value the gateway has on file for this machine is the `MachineGuid` digest, not the SMBIOS
+one.** Measured directly:
+
+| digest sent | source | result |
+|---|---|---|
+| `197abeb5…` | `4a2c4d5c-8b99-e611-b753-c8d3fff1a219` (SMBIOS) | `400 This request is not one DeepAI Code sends.` |
+| `f1e4fcd5…` | `dea5a7b7-8de9-490a-8580-e48b9f966ca9` (MachineGuid) | `200` |
+
+Reason: in the packaged build the `powershell` probe does not answer inside the app's 10 s timeout,
+so `detect()` falls through to `MachineGuid` and that is what got registered. The proxy therefore
+reads **`MachineGuid` first on win32** and only falls back to SMBIOS, so the digest it sends is the
+one the account already has. Dynamic proof (`GET /deepai_code/theos`, the account endpoint):
+
+```
+200 {"enabled":true,"balance":"50.00000","granted":"50.00000","lane_version":4,
+     "check_in":{"nonce":"9bd10dc100f46993a62c085280a913dd","seconds":600}}
+```
+
+That call is also the app's check-in: a nonce the client echoes back via
+`X-DeepAI-Code-Check-In` on the next `/theos`, with `X-DeepAI-Code-Beacon:
+v=<ver>;up=<uptime>;pi=<0|1>;focus=<0|1>`. Chat requests do not need it — but check-in *does not
+register the digest either*: the `400` persisted with a fresh nonce, and switching the digest to the
+`MachineGuid` one is what actually fixed it.
+
+`DEEPAI_MACHINE_ID=<raw id>` overrides the raw value (the header becomes `sha256` of it),
+`DEEPAI_MACHINE_HEADER=0` omits the header entirely.
+
+#### Correction, measured later: the digest is **not** bound to the account
+
+A sweep with the same account and body, changing only the digest:
+
+| digest | result |
 |---|---|
-| win32 | `(Get-CimInstance Win32_ComputerSystemProduct).UUID`, else `HKLM\SOFTWARE\Microsoft\Cryptography` → `MachineGuid` |
-| darwin | `ioreg -rd1 -c IOPlatformExpertDevice` → `IOPlatformUUID` |
-| linux | `/sys/class/dmi/id/product_uuid`, else `/etc/machine-id` |
+| `sha256("4a2c4d5c-…")` (this box's SMBIOS UUID) | **400** (deterministic, repeated) |
+| `sha256("dea5a7b7-…")` (this box's MachineGuid) | 200 |
+| `sha256(randomUUID())` | **200** |
+| `sha256("dea5a7b7-…aa")` (doctored GUID) | 200 |
 
-Known placeholder UUIDs (`0000…`, `ffff…`, `03000200-0400-0500-0006-000700080009`) are rejected, and
-a firmware placeholder falls back to `MachineGuid`. The raw id never leaves the machine.
+So the server does **not** compare the digest against a registered machine — an arbitrary value is
+accepted. The one failing value looks like it is on a server-side denylist (a cloned/VM-template UUID),
+which is why the error text is the generic "not one DeepAI Code sends". Two consequences:
 
-**But sending it to the gateway from a non-app process fails:**
+1. `MachineGuid` is the safe choice for a single account on this machine, but any stable digest works.
+2. A digest is a *label*, not a hardware attestation — which is what makes per-account machines
+   possible (§3.5).
+
+### 3.5 Multiple accounts, one machine digest each
+
+Since the digest is a free-form label, each account can present its own "machine":
+
+```jsonc
+// accounts.json
+{
+  "active": "main",
+  "accounts": [
+    { "name": "main",   "apiKey": "…", "username": "a", "isPro": false },
+    { "name": "second", "apiKey": "…", "username": "b", "machineId": "laptop-b" }
+  ]
+}
+```
+
+`machineId` resolution (`accountMachineId` in `account.mjs`):
+
+| value | digest sent |
+|---|---|
+| omitted | `sha256("deepai-proxy:" + name)` — stable, distinct per account |
+| `"local"` | the real digest of this computer (`machine-guid`) |
+| 64 hex chars | used verbatim (pin a digest another build registered) |
+| any other string | `sha256(that string)`, so a digest can be seeded from a label |
+
+Affinity is derived per account as well (`sha256("deepai-proxy-affinity:" + name + ":" + apiKey)`,
+shaped like a UUID), so session stickiness survives restarts and never leaks between accounts.
+
+Selection per request:
 
 ```
-with machine header      → 400 {"error":{"message":"This request is not one DeepAI Code sends."}}
-without machine header   → 200 SSE
+?account=<name>   >   x-proxy-account: <name>   >   ACCOUNT=<name>   >   accounts.json "active"
 ```
 
-The gateway only accepts a digest it has already registered (the app registers it through its
-`/theos` check-in). So `SEND_MACHINE_HEADER` defaults to **false** and the header is opt-in via
-`DEEPAI_MACHINE_HEADER=1`. The digest is still computed and reported in `GET /health`.
+Why separate digests matter: the daily Theos grant is **per machine digest**, so two accounts sharing
+one digest share one grant pool — and look like multi-accounting on a single machine. Distinct digests
+per account keep grants independent, which is the whole point of the mapping.
 
-### 3.5 The other trap — everything must be streamed
+### 3.6 The other trap — everything must be streamed
 
 `stream: false` on its own gets the same `400 "This request is not one DeepAI Code sends."`.
 The app never sends a non-streaming request: `pi` always assembles
@@ -200,7 +283,7 @@ The app never sends a non-streaming request: `pi` always assembles
 so the gateway validates that shape. Therefore the proxy **always** asks upstream for a stream and,
 if the client wanted one JSON body, folds the SSE back together itself.
 
-### 3.6 Response shape actually returned
+### 3.7 Response shape actually returned
 
 It is OpenAI-compatible, but the reasoning field is `reasoning` (not `reasoning_content`) and the
 `model` field is the internal route (`reflection/beam`, `deepseek/deepseek-v4.1-flash-1017`), not the
@@ -208,54 +291,75 @@ catalog id. SSE frames are `data: {...}`, terminated by `[DONE]`.
 
 ---
 
-## 4. Design of `deepai-proxy.mjs`
+## 4. Design
 
-Zero dependencies, ESM, Node 18+ (`fetch`, `AbortSignal.timeout`, `crypto.randomUUID`). The entry point stays a thin CLI; the logic lives in `src/`:
+### 4.0 Layout
 
-| module | responsibility |
-|---|---|
-| `deepai-proxy.mjs` | CLI dispatch (`login`, `import-app`, `serve`, `whoami`) |
-| `src/config.mjs` | env vars, paths, upstream constants |
-| `src/fingerprint.mjs` | machine id + lane/instance headers |
-| `src/account.mjs` | multi-account store (`acc.json`) + round-robin cursor |
-| `src/login.mjs` | `desktop_auth` exchange + `import-app` |
-| `src/models.mjs` | catalog + fallback model ids |
-| `src/upstream.mjs` | forced-stream upstream request with rotation/failover |
-| `src/anthropic-to-openai.mjs` | Anthropic request → OpenAI request |
-| `src/openai-to-anthropic.mjs` | OpenAI response → Anthropic response + stop map |
-| `src/stream-aggregate.mjs` | fold SSE into one completion |
-| `src/anthropic-stream.mjs` | OpenAI SSE → Anthropic SSE |
-| `src/http-server.mjs` | routing, guards, handlers |
-| `src/api.mjs` | accounts CRUD/export, login start, usage API |
-| `src/metrics.mjs` | in-memory request/token counters |
-| `src/ui.html` | multi-account control panel (`GET /`) |
+`deepai-proxy.mjs` is the CLI entry point and stays thin; the logic lives in `src/`.
+
+```
+deepai-proxy.mjs             command dispatch (login|import-app|accounts|use|verify|serve|whoami)
+src/
+├── config.mjs               env + paths, every tunable in one place
+├── account.mjs              store, named accounts, per-account digest + affinity, weights, cursor
+├── login.mjs                desktop auth flow, exchange, import-app, UI callback, auto-capture
+├── fingerprint.mjs          machine probes, per-account digest + affinity, header set
+├── models.mjs               catalog ids (app's models.json, else fallback list)
+├── upstream.mjs             payload normalisation, rotation/failover, the upstream fetch
+├── anthropic-to-openai.mjs  request translation
+├── openai-to-anthropic.mjs  response translation
+├── stream-aggregate.mjs     SSE -> single chat.completion (+ usage tap for live streams)
+├── anthropic-stream.mjs     OpenAI SSE -> Anthropic SSE
+├── http-server.mjs          routing, guards, handlers, control panel
+├── api.mjs                  panel API: accounts, settings, login, capture, usage, verify
+├── metrics.mjs              per-process request/token counters
+├── verify.mjs               live fingerprint check (theos + chat with and without the digest)
+└── ui.html                  the control panel served at /
+```
+
+One file, zero dependencies, ESM, Node 18+ (`fetch`, `AbortSignal.timeout`, `crypto.randomUUID`).
 
 ### 4.1 Commands
 
 | command | behaviour |
 |---|---|
-| `serve` (default) | HTTP server on `127.0.0.1:8787` |
-| `login` | the §3.1 flow; binds an ephemeral port, prints + opens the URL, adds/updates an account in `acc.json` |
-| `import-app` | copies `~/.deepai-code/userdata/secrets/deepai-account.bin` into the account store |
-| `whoami` | prints every account (masked), rotation cursor, machine digest |
+| `serve` (default) | HTTP server on `127.0.0.1:8787`, plus the panel at `/` |
+| `login [name]` | the §3.1 flow; the callback returns to the panel port, saves the account, then auto-captures app credentials |
+| `import-app [name]` | copies `~/.deepai-code/userdata/secrets/deepai-account.bin` in as an account |
+| `accounts` | lists accounts with weight and machine digest, `*` marks the active one |
+| `use <name>` | sets the active account |
+| `verify [name]` | prints the header set, calls `/theos`, then chats **with and without** the digest |
+| `whoami [name]` | masked key, weight, machine digest, store path |
+
+`acc.json` stays the store and carries a top-level `apiKey` mirror of the active account, so anything
+that reads the old single-account shape keeps working. `accounts.json` is read when it exists (older
+builds wrote it there) and is written back in the same place.
 
 ### 4.2 Environment
 
 | var | default | purpose |
 |---|---|---|
 | `PORT` | `8787` | listen port |
-| `ACC_PATH` | `./acc.json` | credential file |
-| `PROXY_TOKEN` | *(empty)* | require `Authorization: Bearer` on this proxy |
+| `ACC_PATH` | `./acc.json` | the store (and the legacy mirror inside it) |
+| `ACCOUNTS_PATH` | `./accounts.json` | second store path; preferred when it exists |
+| `ACCOUNT` | *(empty)* | pin every request to this account name |
+| `PROXY_TOKEN` | *(empty)* | require `Authorization: Bearer` on `/v1/*` |
 | `DEEPAI_API_ORIGIN` | `https://api.deepai.org` | origin override (dev/testing) |
-| `DEEPAI_USERDATA` | `~/.deepai-code/userdata` | where `import-app` and the catalog read from |
-| `DEEPAI_MACHINE_HEADER` | off | send the machine digest (§3.4) |
-| `DEBUG` | off | log the exact upstream body |
+| `DEEPAI_USERDATA` | `~/.deepai-code/userdata` | where `import-app`, auto-capture and the catalog read from |
+| `DEEPAI_MACHINE_HEADER` | off (`1` forces on) | send `X-DeepAI-Code-Machine`; the panel can also toggle it |
+| `DEEPAI_MACHINE_ID` | auto probe | raw id hashed into the local digest |
+| `DEEPAI_SESSION_AFFINITY` | random UUID | last-resort affinity when no account is involved |
+| `DEBUG` | off | log the exact upstream JSON body |
+| `DEBUG_HEADERS` | off | log the exact outgoing header set (`api-key` masked) |
+| `LOG_REQUESTS` | off | log inbound requests with credentials redacted |
 
 ### 4.3 Credential handling
 
-`acc.json` is written with `mode: 0o600` (+ `chmodSync` for platforms that ignore the mode on
-create) and only ever holds `{apiKey, username, isPro}`. `loadAccount()` is called **per request**, so
-re-running `login` while the server is up takes effect immediately with no restart.
+The store is written with `mode: 0o600` (+ `chmodSync` for platforms that ignore the mode on
+create). Records hold `{name, apiKey, username, isPro, weight, machineId?, affinity?}`; the top level
+holds `{active, apiKey, username, isPro, settings, accounts}`, where `apiKey`/ `username`/`isPro`
+mirror the active account for old readers. Accounts are resolved **per request**, so `login`, `use`
+or a weight change takes effect immediately with no restart.
 
 ### 4.4 Request path
 
@@ -268,12 +372,12 @@ client ──POST /v1/messages ──► anthropicToOpenAI ──► upstream (S
 
 Guard order is deliberate (mirrors §3.3):
 
-1. `GET /`, `GET /ui`, `GET /health`, `GET /v1/models` (always open, local only)
-2. `Origin` header present and not loopback (any port) → 403; `OPTIONS` → 204 + CORS
-3. `/api/*` dispatch (account, login, usage)
+1. `GET /` (panel), `GET /health`, `GET /v1/models` (always open, local only)
+2. `Origin` present and not loopback → 403; `OPTIONS` → 204 + CORS
+3. `/auth-callback` (login return), `/api/*` (panel API)
 4. non-POST → 404
 5. `PROXY_TOKEN` mismatch → 401
-6. `/v1/*` route dispatch
+6. `/v1/*` dispatch; `?account=` / `x-proxy-account` pins the account, else the rotation decides
 
 ### 4.5 Anthropic → OpenAI translation (`anthropicToOpenAI`)
 
@@ -352,75 +456,65 @@ Since upstream is forced to stream, a `stream:false` client needs the deltas fol
 Anthropic clients call it before every send. It has no upstream equivalent, so it returns
 `ceil(len(JSON)/4)` — good enough to keep clients happy, never bills Theos.
 
-### 4.10 Web UI and account API
+### 4.10 Account store
 
-`serve` also hosts a small control panel at `http://127.0.0.1:8787/` (`GET /` or `/ui`). It can:
+`account.mjs` owns the store and the two per-account fingerprint fields:
 
-* start the sign-in flow (`POST /api/login`) and detect completion by polling `GET /health`;
-* finish a sign-in by pasting the callback URL or bare code (`POST /api/login/callback`);
-* scan for and import every desktop app credential (`GET`/`POST /api/capture`);
-* flip rotation on/off (`POST /api/settings`) and read the weighted schedule;
-* change an account's weight (`PATCH /api/accounts/:index`);
-* list accounts with masked keys (`GET /api/accounts`), add/update one or many
-  (`POST /api/accounts`), remove one (`DELETE /api/accounts/:index`) or all (`DELETE /api/accounts`),
-  and export every key (`GET /api/accounts/export`);
-* keep the old single-account routes (`GET`/`POST`/`DELETE /api/account`) for compatibility;
-* show per-process usage counters (`GET /api/usage`): requests, errors, prompt/completion tokens,
-  last model, last request time, last account used, and the next rotation index;
-* send a test chat completion and estimate tokens through the proxy endpoints.
-
-Loopback `Origin` headers (`127.0.0.1`, `localhost`, `::1`, `0.0.0.0`, any port) are accepted,
-including `OPTIONS` preflight with CORS headers, so the panel also works when previewed from
-another local port. Every other origin still gets `403`. Counters live in `src/metrics.mjs` and
-reset on restart.
-
-### 4.11 Multiple accounts, weights and round-robin
-
-`acc.json` stores:
-
-```json
-{
-  "accounts": [ { "apiKey": "...", "username": "...", "isPro": false, "weight": 1 } ],
-  "settings": { "rotation": "round-robin" }
-}
+```
+loadStore()      -> { accounts[], settings }      names derived and persisted on first read
+loadAccounts()   -> accounts[]
+findAccount(n)   -> account | null                n omitted -> active, else first
+addAccount(a)    -> upsert by apiKey              duplicate keys update, never duplicate
+updateAccount(i, patch)                           weight / name / machineId / affinity
+setActive(n)     -> switch the active account
+accountMachineId(account, localDigest)            see §3.5 table
+accountAffinity(account)                          sha256(name + ":" + apiKey), UUID-shaped
 ```
 
-A legacy bare account object or a bare `accounts` array is still read. Duplicate keys update the
-existing entry, so importing the same login twice does not create a second slot.
+Resolution is by account **name**, not by array position, so hand-editing the file (adding a
+`machineId`, reordering) cannot silently swap credentials. Names default to the username, are made
+unique (`name-2`, `name-3`), and are written back on the first read so a later reorder cannot rename
+an account. Records without an `apiKey` are skipped instead of throwing, so one broken record cannot
+take the server down.
 
-**Weights.** `weight` is 1–20 (default 1). The store builds a deterministic ring from the weights —
-2:1 gives `A, B, A` — and `nextAccount()` walks it with a cursor, so concurrent requests interleave
-predictably. The ring is cached and rebuilt only when the list or a weight changes, which also
-resets the cursor.
+`http-server.mjs` resolves the account **per request** (`pickAccount`): `?account=<name>` >
+`x-proxy-account` header > `ACCOUNT` env > rotation. A requested account that does not exist is a
+`404` instead of a silent fallback, so a typo cannot spend the wrong account's Theos.
 
-**Toggle.** `settings.rotation` is `"round-robin"` (default) or `"single"`. In `"single"` every
-request uses account #0, which is the escape hatch when one account should take all traffic.
-`GET /api/settings` returns the mode plus the resolved schedule (`order`, `nextIndex`,
-`totalWeight`); the panel draws it as chips with the next slot highlighted.
+### 4.11 Rotation, weights, and the control panel
 
-**Failover.** `src/upstream.mjs` rotates on every upstream request. If the chosen account yields
-`401`, `403`, or `429`, or the network call throws, it discards that response, takes the next
-account, and retries, up to one attempt per stored account; the final response is returned to the
-client with its body intact. The account used for each attempt is recorded as `lastAccount` in
-`GET /api/usage`.
+`settings.rotation` is `"round-robin"` (default) or `"single"`. Round-robin walks a ring built from
+the per-account `weight` (1-20): weight 2 vs 1 gives `A, B, A`. The ring is cached and rebuilt only
+when the list or a weight changes, which also resets the cursor. `"single"` pins every request to
+`settings.active`, which is what `use <name>` and the panel's **Pin** button change.
 
-**Auto-capture.** `findAppAccounts()` reads `secrets/deepai-account.bin` and walks up to three
-levels under the userdata folder for any `.json`/`.bin` file carrying an `apiKey`. `serve` runs it
-once on startup when the store is empty, and `captureAfterLogin()` runs it after every successful
-sign-in, so a fresh login also picks up whatever the desktop app had stored.
+`upstreamFetch` rotates per request. A rejected account (`401`, `403`, `429`) or a network failure
+moves to the next one, up to one attempt per account, and the final response is returned with its
+body intact. The account used is recorded as `lastAccount` in `GET /api/usage`. A pinned account
+(`?account=`) is used directly and does **not** fail over, so its real error reaches the caller.
 
-**Login completion.** The UI flow binds no listener of its own: `startLoginFlow()` registers a state
-and points the `port` parameter at the panel's own port, so the callback lands on
-`GET /auth-callback` of the main server and works through whatever forwarding reaches the panel.
-If the tab still ends on a callback URL, `POST /api/login/callback` accepts the pasted URL or bare
-code and completes the exchange; a pasted state is only used to retire a pending flow, so URLs from
-an older tab or a restarted server still work.
+The panel (`GET /`) is plain HTML with no build step. Its API:
 
-CLI `login`/`import-app` and every UI add/import path go through the same `addAccount()`.
+| endpoint | purpose |
+|---|---|
+| `GET /api/accounts` | accounts with masked keys, weight, digest prefix, settings, rotation order |
+| `POST /api/accounts` | add/update one, an array, or `{accounts:[...]}` |
+| `PATCH /api/accounts/:index` | `weight`, `name`, `machineId`, `affinity` |
+| `DELETE /api/accounts/:index` / `/api/accounts` | remove one / all |
+| `GET /api/accounts/export` | every stored key |
+| `GET`/`POST /api/settings` | `rotation`, `active`, `sendMachineHeader` |
+| `POST /api/login` | start the flow (callback lands on the panel port) |
+| `POST /api/login/callback` | finish from a pasted callback URL or bare code |
+| `GET`/`POST /api/capture` | scan / import desktop app credentials |
+| `POST /api/verify` | live fingerprint report for one account |
+| `GET /api/usage` | per-process counters, last account, rotation state |
 
-`accountsRevision` in `/health` and `/api/accounts` bumps on every store change. The panel records
-it before login and waits for a change, so re-signing into an account that is already stored is
-also detected as success.
+`sendMachineHeader` defaults **off**: the local digest is the value the gateway rejected on this
+machine, so the header is opt-in. Turning it on sends each account's own digest, and `verify` reports
+both variants so a rejected digest can be told apart from a rejected payload.
+
+Loopback `Origin` headers (`127.*`, `localhost`, `::1`, `0.0.0.0`, any port) are accepted so the
+panel's fetches work, including `OPTIONS` preflight. Every other origin still gets `403`.
 
 ---
 
@@ -428,7 +522,7 @@ also detected as success.
 
 | check | result |
 |---|---|
-| `node --check` | clean |
+| `node --check` on every module | clean |
 | `import-app` | `user=deltaapoc317 pro=false`, 102 B `acc.json` |
 | `GET /health` | `{"ok":true,"signedIn":true,…}` |
 | `GET /v1/models` | 22 ids read from the app's catalog |
@@ -437,30 +531,23 @@ also detected as success.
 | `POST /v1/messages` | `content:[{thinking…},{text:"4"}]`, `stop_reason:"end_turn"` |
 | `POST /v1/messages` `stream:true` | `message_start` → `thinking` block → `text` block → `message_stop` |
 | forced `tool_choice:{type:"tool"}` | `{type:"tool_use",name:"get_time",input:{tz:"UTC"}}`, `stop_reason:"tool_use"` |
-| `Origin` header (non-loopback) | 403, same as the app |
-| `Origin` header (loopback) | accepted for the UI |
-| `GET /` (UI) | 200 `text/html`, panel markers present |
-| `GET /api/usage` | counters increment after requests |
-| `POST /api/accounts` round-trip | added=0/updated=1 for the existing key |
-| second account add/remove | count 1→2→1, real account untouched |
-| legacy single-object `acc.json` | read as a one-account store |
-| duplicate `apiKey` | updated in place, never duplicated |
-| rotation unit test | A → B → A → B, cursor advances |
-| weighted ring 2:1 | order `[0,1,0]`, requests used A, B, A, A, B, A |
-| `rotation:"single"` | four requests all used account #0 |
-| toggle back to round-robin | schedule rebuilt, requests resumed A, B, A |
-| weight clamping | 99 → 20, 0 → 1, unknown index → 404 |
-| `GET /api/capture` | `found:0` with no desktop app on this machine |
-| paste validation | empty → 400, garbage → 400, bad code shape → 400 |
-| UI `GET /` | 200, 33 KB, weight steppers + toggle + paste box present |
-| round-robin integration (fake upstream) | four requests used keys A, B, A, B |
-| failover on 401 (fake upstream) | B rejected, same request retried with A, 200 |
-| all accounts rejected | 401 with the final upstream error body |
-| `accountsRevision` | 0 → 1 after add, → 2 after remove |
-| `GET /api/accounts/export` | `{accounts:[...]}` with every stored key |
-| `startLoginFlow()` | auth URL with `state` + `port`, callback closes |
-| machine header on | 400 `"This request is not one DeepAI Code sends."` |
-| machine header off | 200 |
+| `verify deltaapoc317` | `theos 200` (balance 49.97/50), `chat + machine 200`, `chat - machine 200`, OK |
+| machine header on, pinned account | `200`, per-account digest accepted (§3.5 correction confirmed) |
+| account rejected by the gateway | `403 social_login_required` surfaced with the account name |
+| weighted ring 2:1 | requests used `alpha, bravo, alpha, alpha, bravo, alpha` |
+| `rotation:"single"` | every request used the **active** account, not index 0 |
+| `?account=bravo` | request used `bravo`'s key; unknown name → `404` |
+| name persistence | derived names written once; two runs produced identical output |
+| `GET /api/verify` | returns the header set, digest, affinity and all three checks |
+| `Origin` header | 403, same as the app |
+| machine header = SMBIOS digest | 400 `"This request is not one DeepAI Code sends."` |
+| machine header = MachineGuid digest | 200 |
+| full app header set (incl. machine + affinity) | 200, `DEBUG_HEADERS` output identical to §3.2 |
+| `GET /deepai_code/theos` with the same headers | 200, balance + check-in nonce |
+| digest sweep: SMBIOS / MachineGuid / random / doctored | 400 / 200 / 200 / 200 → digest is a label, not attestation |
+| two accounts in `accounts.json`, no selector | account `main` served |
+| `?account=second` | distinct `api-key` (26 vs 36 chars), distinct machine digest, distinct affinity; upstream `401` for the dummy key as expected |
+| `verify main` after cleanup | `theos 200`, `chat 200`, "OK" |
 
 ---
 
@@ -473,9 +560,12 @@ also detected as success.
    loopback bridge — the `radius` entries are catalog entries for other models.
 3. **Looking for the gateway host in `app.asar`.** It is not there; the driver lives in
    `server.asar`, and the constant is assembled as `DEEPAI_API_ORIGIN + "/deepai_code"`.
-4. **`stream:false` rejected.** Fixed by always streaming upstream (§3.5).
-5. **`400` after fixing (4)** — caused by the machine header (§3.4), isolated with a two-variant
-   probe.
+4. **`stream:false` rejected.** Fixed by always streaming upstream (§3.6).
+5. **`400` after fixing (4)** — caused by the machine header. Isolating it needed a two-variant probe
+   (same body, header toggled), then a digest sweep. Fix at the time: read `MachineGuid` first on
+   win32 (§3.4). The later sweep showed the real shape of the rule: an arbitrary digest is accepted
+   and one specific SMBIOS value is denylisted, so "registered machine" was the wrong mental model —
+   the header is a label (§3.5).
 6. **Stale process during testing.** The first `serve` kept holding `:8787`, so the new code never
    loaded and the same error reappeared. Always kill the listener by PID from `netstat` before
    re-testing.
@@ -486,15 +576,13 @@ also detected as success.
 
 ## 7. Security / operational notes
 
-* `acc.json` holds **plaintext** keys, one per stored account — the app itself keeps the same key in
-  plaintext at `~/.deepai-code/userdata/secrets/deepai-account.bin`, so this is not a new exposure,
-  but it is a real one: treat the file like a password, and `rm acc.json` when done. Prefer `login`
-  (fresh exchange) over `import-app` if you don't want a copy at all.
+* `accounts.json` / `acc.json` hold the account key **in plaintext** — the app itself keeps the same
+  key in plaintext at `~/.deepai-code/userdata/secrets/deepai-account.bin`, so this is not a new
+  exposure, but it is a real one: treat those files like passwords and delete them when done. Prefer
+  `login` (fresh exchange) over `import-app` if you don't want a copy at all.
 * The server binds `127.0.0.1` only. `PROXY_TOKEN` exists for the case where something else on the
   machine should not be able to drive your account.
-* Non-loopback browser `Origin` requests are refused, which kills the obvious CSRF path. Loopback
-  origins are accepted so the local panel can call the API; anything already running as your user can
-  read `acc.json` anyway.
+* Browser `Origin` requests are refused, which kills the obvious CSRF path.
 * Every call spends the account's Theos; catalog entries with `theosPerRequest: "0"` are free.
 * Reusing a desktop client's private endpoint from other tools may fall outside DeepAI's terms of
   service — that is a decision for the account holder, not something this script can decide.
@@ -505,11 +593,44 @@ also detected as success.
 
 | symptom | cause |
 |---|---|
-| `400 This request is not one DeepAI Code sends.` | `stream`/`stream_options` missing, or machine header sent unregistered |
+| `400 This request is not one DeepAI Code sends.` | `stream`/`stream_options` missing, `X-Session-Affinity` omitted, or the account's `machineId` is a denylisted value (§3.4) |
 | `401 not signed in` | `acc.json` missing/empty → `login` or `import-app` |
-| `403 model transport authentication required` | client sent a non-loopback `Origin` header |
-| login tab ends on `/auth-callback` | paste that URL into **Manual sign-in** to finish it |
-| every request `401`/`403`/`429` | all stored accounts were rejected; re-login or add another |
+| `403 model transport authentication required` | client sent an `Origin` header |
 | `EADDRINUSE` on start | an older `serve` still owns the port — kill the PID from `netstat` |
 | `401`/`429` during `login` | link expired/used or too many attempts — restart `login` |
 | `proxy.log` shows a body you didn't expect | rerun with `DEBUG=1` |
+| `unknown account "x"` | `node deepai-proxy.mjs accounts` to list; `use` to switch |
+| `403 social_login_required` from upstream | that account signed in without Google/Apple, so DeepAI Code refuses it; rotate it out or remove it |
+| login tab ends on `/auth-callback` | paste that URL into the panel's **Manual sign-in** box |
+
+---
+
+## 9. Final state of this build
+
+```
+HOWIBUILD.md     this file - how + protocol
+DECISIONS.md     why, with evidence
+acc.json         credential store (0600), holds the active-account mirror too
+accounts.json    read/written when present (older builds stored accounts here)
+src/*.mjs        13 modules + ui.html; deepai-proxy.mjs is the CLI entry point
+```
+
+Session order, so the reasoning can be replayed:
+
+1. locate the app's data (`~/.deepai-code/userdata`), read `models.json` → it points at a loopback
+   bridge with an OpenAI-shaped API;
+2. reverse `server.asar` → origin, `/deepai_code` base, lane headers, sign-in flow, machine id;
+3. build the single-file proxy; login + import; OpenAI and Anthropic endpoints; SSE both ways;
+4. hit `400 … not one DeepAI Code sends.` twice — first fixed by forcing `stream` +
+   `stream_options`, then by the machine digest;
+5. prove the header set is the app's (`DEBUG_HEADERS`, `verify`), normalise JSON key order, always
+   send `X-Session-Affinity`;
+6. digest sweep disproves "registered machine" and enables per-account machines;
+7. modularise into `src/`, add `accounts`/`use`/`verify`, redact logging;
+8. merge the two builds: named accounts and per-account digests from the `src1` tree, plus the
+   control panel, weights, rotation toggle, auto-capture and pasted-callback login;
+9. document all of it here and in `DECISIONS.md`.
+
+Known open items, deliberately not done: `/responses` and the two provider-side tools, the `/theos`
+check-in loop, and any local capacity queue — see `DECISIONS.md` “What was deliberately not
+implemented”.

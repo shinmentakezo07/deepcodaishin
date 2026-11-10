@@ -2,12 +2,15 @@ import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { PORT, MODEL_BASE, PROXY_TOKEN, ACC_PATH, ROOT_DIR } from "./config.mjs";
+import { PORT, MODEL_BASE, PROXY_TOKEN, ACC_PATH, ROOT_DIR, ACCOUNT_NAME, LOG_REQUESTS, SEND_MACHINE_HEADER } from "./config.mjs";
 import { handleApi } from "./api.mjs";
 import { handleLoginCallback } from "./login.mjs";
-import { MACHINE_HEADER } from "./fingerprint.mjs";
+import { MACHINE_HEADER, MACHINE_SOURCE } from "./fingerprint.mjs";
 import {
+  listAccounts,
   listAccountSummaries,
+  findAccount,
+  accountMachineId,
   accountCount,
   accountsRevision,
   rotationState,
@@ -27,21 +30,50 @@ import { recordRequest, recordUsage, recordError } from "./metrics.mjs";
 const UI_PATH = path.join(ROOT_DIR, "src", "ui.html");
 
 function healthPayload() {
-  const accounts = listAccountSummaries();
-  const first = accounts[0];
+  const accounts = listAccounts();
+  const active = accounts.find((a) => a.active) || accounts[0];
   return {
     ok: true,
     signedIn: accounts.length > 0,
-    username: first ? first.username : null,
-    isPro: first ? first.isPro : null,
+    username: active ? active.username : null,
+    isPro: active ? active.isPro : null,
+    activeAccount: active ? active.name : null,
     accountCount: accounts.length,
     accountsRevision: accountsRevision(),
     settings: loadSettings(),
     rotation: rotationState(),
-    machine: MACHINE_HEADER ? "present" : "absent",
+    accounts: accounts.map((a) => ({
+      name: a.name,
+      username: a.username,
+      isPro: a.isPro,
+      weight: a.weight,
+      active: a.active,
+      machine: accountMachineId(a, MACHINE_HEADER).slice(0, 12) + "...",
+    })),
+    machine: MACHINE_HEADER ? "present (" + MACHINE_SOURCE + ")" : "absent",
+    sendMachineHeader: SEND_MACHINE_HEADER || loadSettings().sendMachineHeader === true,
     upstream: MODEL_BASE,
     ui: "http://127.0.0.1:" + PORT + "/",
   };
+}
+
+/**
+ * Which account serves this request:
+ *   ?account=<name>  >  x-proxy-account header  >  ACCOUNT env  >  rotation
+ * Returns null when the caller did not ask for a specific account.
+ */
+function pickAccount(req, url) {
+  const name =
+    url.searchParams.get("account") ||
+    (typeof req.headers["x-proxy-account"] === "string" ? req.headers["x-proxy-account"] : "") ||
+    ACCOUNT_NAME ||
+    "";
+  if (!name) return null;
+  const account = findAccount(name);
+  if (!account) {
+    throw Object.assign(new Error('unknown account "' + name + '"'), { status: 404 });
+  }
+  return account;
 }
 
 function isLoopbackHost(host) {
@@ -137,7 +169,7 @@ function authorized(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-async function handleChatCompletions(req, res) {
+async function handleChatCompletions(req, res, account) {
   const raw = await readBody(req);
   let payload;
   try {
@@ -154,13 +186,17 @@ async function handleChatCompletions(req, res) {
   // Upstream is always streamed; the client may still ask for a single JSON body.
   const wantsStream = payload.stream === true;
   const affinity = req.headers["x-session-affinity"] || payload.prompt_cache_key || undefined;
-  const up = await upstreamFetch(payload, { affinity });
+  const up = await upstreamFetch(payload, { affinity, account });
 
   if (!up.ok) {
     recordError();
     const text = await up.text().catch(() => "");
     return json(res, up.status, {
-      error: { message: upstreamErrorMessage(up.status, text), type: "upstream_error", code: `upstream_${up.status}` },
+      error: {
+        message: upstreamErrorMessage(up.status, text, account ? account.name : undefined),
+        type: "upstream_error",
+        code: "upstream_" + up.status,
+      },
     });
   }
 
@@ -192,7 +228,7 @@ async function handleChatCompletions(req, res) {
   }
 }
 
-async function handleMessages(req, res) {
+async function handleMessages(req, res, account) {
   const raw = await readBody(req);
   let input;
   try {
@@ -209,12 +245,16 @@ async function handleMessages(req, res) {
   const wantsStream = input.stream === true;
   const upstreamReq = anthropicToOpenAI(input);
 
-  const up = await upstreamFetch(upstreamReq, { affinity: req.headers["x-session-affinity"] });
+  const up = await upstreamFetch(upstreamReq, { affinity: req.headers["x-session-affinity"], account });
 
   if (!up.ok) {
     recordError();
     const text = await up.text().catch(() => "");
-    return json(res, up.status, errBody(upstreamErrorMessage(up.status, text), "upstream_error"));
+    return json(
+      res,
+      up.status,
+      errBody(upstreamErrorMessage(up.status, text, account ? account.name : undefined), "upstream_error"),
+    );
   }
 
   if (!wantsStream) {
@@ -258,9 +298,15 @@ function startServer() {
   }
   const server = http.createServer(async (req, res) => {
     try {
-        // request log: method and path only, never credentials
-        console.log(`[HTTP] ${req.method} ${req.url}`);
       const url = new URL(req.url || "/", `http://127.0.0.1:${PORT}`);
+      if (LOG_REQUESTS) {
+        // Never echo credentials: the proxy token and any client key arrive as headers.
+        const safe = { ...req.headers };
+        for (const k of ["authorization", "api-key", "x-api-key", "cookie"]) {
+          if (safe[k]) safe[k] = "<redacted len " + String(safe[k]).length + ">";
+        }
+        console.log("[HTTP] " + req.method + " " + url.pathname + " " + JSON.stringify(safe));
+      }
 
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/ui")) {
         return await serveUi(res);
@@ -313,8 +359,8 @@ function startServer() {
         return json(res, 401, errBody("invalid proxy token", "authentication_error"));
       }
 
-      if (url.pathname === "/v1/chat/completions") return await handleChatCompletions(req, res);
-      if (url.pathname === "/v1/messages") return await handleMessages(req, res);
+      if (url.pathname === "/v1/chat/completions") return await handleChatCompletions(req, res, pickAccount(req, url));
+      if (url.pathname === "/v1/messages") return await handleMessages(req, res, pickAccount(req, url));
       if (url.pathname === "/v1/messages/count_tokens") {
         return handleCountTokens(req, res, await readBody(req));
       }
@@ -330,7 +376,14 @@ function startServer() {
     console.log("  UI       : http://127.0.0.1:" + PORT + "/");
     console.log(`  OpenAI   : POST http://127.0.0.1:${PORT}/v1/chat/completions`);
     console.log(`  Anthropic: POST http://127.0.0.1:${PORT}/v1/messages`);
-    console.log(`  upstream : ${MODEL_BASE}   machine header: ${MACHINE_HEADER ? "yes" : "no"}`);
+    const named = listAccounts();
+    console.log("  accounts : " + (named.length ? named.map((a) => a.name).join(", ") : "(none)"));
+    console.log("  active   : " + ((named.find((a) => a.active) || named[0] || {}).name || "-"));
+    console.log(
+      "  upstream : " + MODEL_BASE + "   machine header: " +
+        (SEND_MACHINE_HEADER || loadSettings().sendMachineHeader ? "on (per account)" : "off") +
+        "   local digest: " + (MACHINE_HEADER ? MACHINE_SOURCE : "unavailable"),
+    );
   });
 }
 
