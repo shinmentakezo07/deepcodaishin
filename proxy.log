@@ -1,0 +1,4 @@
+deepai-proxy listening on http://127.0.0.1:8787
+  OpenAI   : POST http://127.0.0.1:8787/v1/chat/completions
+  Anthropic: POST http://127.0.0.1:8787/v1/messages
+  upstream : https://api.deepai.org/deepai_code   machine header: yes
