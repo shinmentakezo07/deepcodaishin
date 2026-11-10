@@ -314,8 +314,24 @@ src/
 ├── api.mjs                  panel API: accounts, settings, login, capture, usage, verify
 ├── metrics.mjs              per-process request/token counters
 ├── verify.mjs               live fingerprint check (theos + chat with and without the digest)
-└── ui.html                  the control panel served at /
+└── ui.html                  fallback panel, used when ui/dist is absent
+
+ui/                          control panel source (Vite + React + Tailwind)
+├── package.json             dev-only dependencies; nothing is needed at runtime
+├── vite.config.js           base "./", dev server proxies /api, /health, /v1 to 8787
+├── index.html
+├── src/main.jsx             entry
+├── src/App.jsx              state, polling, handlers
+├── src/api.js               fetch wrapper + formatters
+├── src/index.css            Tailwind import, glass/ambient styles
+└── src/components/          ui primitives, Rotation, Accounts, Login, Usage, TestPanel
+
+ui/dist/                     committed build output; served at "/" by http-server.mjs
 ```
+
+The panel is served from memory: `serveUi` prefers `ui/dist/index.html` and falls back to
+`src/ui.html`, so `node deepai-proxy.mjs serve` works on a fresh clone with no npm. `/assets/*` is
+served from `ui/dist` only, with a path check that refuses anything outside it.
 
 One file, zero dependencies, ESM, Node 18+ (`fetch`, `AbortSignal.timeout`, `crypto.randomUUID`).
 

@@ -1,0 +1,57 @@
+services:
+  deepai-proxy:
+    build: .
+    image: deepai-proxy:local
+    container_name: deepai-proxy
+    ports:
+      # Loopback-only on the host, even though the container listens on 0.0.0.0.
+      - "127.0.0.1:8787:8787"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8787"
+      ACC_PATH: "/data/acc.json"
+      ACCOUNTS_PATH: "/data/accounts.json"
+      DEEPAI_USERDATA: "/data/userdata"
+      # Optional: require Authorization: Bearer <token> on /v1/* endpoints
+      # PROXY_TOKEN: "change-me"
+      # Optional: default account when no ?account= selector is given
+      # ACCOUNT: "main"
+      # Optional: diagnostics (all off by default, credentials redacted)
+      # LOG_REQUESTS: "1"
+      # DEBUG_HEADERS: "1"
+      # DEBUG: "1"
+      # DEEPAI_MACHINE_HEADER: "1"   # send per-account machine digests
+      # DEEPAI_MACHINE_ID: "<raw-machine-id>"
+      # DEEPAI_API_ORIGIN: "https://api.deepai.org"
+      # VERIFY_MODEL: "deepseek-v4.1-flash"
+    volumes:
+      # Credential store. Plaintext API keys: treat as passwords, never bake into
+      # the image. Remove ":ro" if you want the panel's login/import/remove
+      # controls to persist changes from inside the container.
+      - ./acc.json:/data/acc.json
+      # Optional separate named-account store:
+      # - ./accounts.json:/data/accounts.json
+      # Optional desktop-app data for "Auto-capture" and the model catalog:
+      # - ~/.deepai-code/userdata:/data/userdata:ro
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+    # Uncomment if your Docker supports Compose deploy limits:
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 256M

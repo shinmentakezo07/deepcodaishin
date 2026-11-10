@@ -1,0 +1,14 @@
+# dependencies (ui/dist IS committed - it is the prebuilt panel)
+node_modules/
+**/node_modules/
+
+# build/test scratch
+.tmp-*
+*.tmp
+
+# logs
+*.log
+
+# local credential store - never commit
+acc.json
+accounts.json

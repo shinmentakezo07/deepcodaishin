@@ -2,7 +2,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { PORT, MODEL_BASE, PROXY_TOKEN, ACC_PATH, ROOT_DIR, ACCOUNT_NAME, LOG_REQUESTS, SEND_MACHINE_HEADER } from "./config.mjs";
+import { HOST, PORT, MODEL_BASE, PROXY_TOKEN, ACC_PATH, ROOT_DIR, ACCOUNT_NAME, LOG_REQUESTS, SEND_MACHINE_HEADER } from "./config.mjs";
 import { handleApi } from "./api.mjs";
 import { handleLoginCallback } from "./login.mjs";
 import { MACHINE_HEADER, MACHINE_SOURCE } from "./fingerprint.mjs";
@@ -116,17 +116,61 @@ function applyCors(req, res) {
   res.setHeader("Access-Control-Max-Age", "600");
 }
 
+const UI_DIST = path.join(ROOT_DIR, "ui", "dist");
+const UI_DIST_INDEX = path.join(UI_DIST, "index.html");
+
+const STATIC_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".map": "application/json; charset=utf-8",
+};
+
+/**
+ * Serve the panel. A built React bundle (ui/dist) wins when it exists; the
+ * single-file panel in src/ui.html is the fallback, so a fresh clone without a
+ * build step still gets a working UI.
+ */
 async function serveUi(res) {
-  try {
-    const html = await fs.promises.readFile(UI_PATH, "utf8");
-    res.writeHead(200, {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-    });
-    res.end(html);
-  } catch (err) {
-    json(res, 500, errBody("UI not available: " + err.message));
+  const built = await fs.promises.readFile(UI_DIST_INDEX).catch(() => null);
+  if (built) {
+    res.writeHead(200, { "Content-Type": STATIC_TYPES[".html"], "Cache-Control": "no-store" });
+    return res.end(built);
   }
+  const legacy = await fs.promises.readFile(UI_PATH).catch(() => null);
+  if (!legacy) {
+    return json(res, 500, errBody("UI not available: no ui/dist build and no src/ui.html"));
+  }
+  res.writeHead(200, { "Content-Type": STATIC_TYPES[".html"], "Cache-Control": "no-store" });
+  res.end(legacy);
+}
+
+/** Static assets for the built panel, confined to ui/dist. */
+async function serveAsset(res, pathname) {
+  const rel = pathname.replace(/^\/+/, "");
+  const target = path.resolve(UI_DIST, rel);
+  if (target !== UI_DIST && !target.startsWith(UI_DIST + path.sep)) {
+    return json(res, 403, errBody("forbidden", "permission_error"));
+  }
+  const body = await fs.promises.readFile(target).catch(() => null);
+  if (!body) return json(res, 404, errBody("not found", "not_found_error"));
+  const type = STATIC_TYPES[path.extname(target).toLowerCase()] || "application/octet-stream";
+  const immutable = /-[A-Za-z0-9_]{8,}\.(js|css)$/.test(target);
+  res.writeHead(200, {
+    "Content-Type": type,
+    "Content-Length": body.length,
+    "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-store",
+  });
+  res.end(body);
 }
 
 function json(res, status, body) {
@@ -312,6 +356,10 @@ function startServer() {
         return await serveUi(res);
       }
 
+      if (req.method === "GET" && url.pathname.startsWith("/assets/")) {
+        return await serveAsset(res, url.pathname);
+      }
+
       if (req.method === "GET" && url.pathname === "/health") {
         return json(res, 200, healthPayload());
       }
@@ -371,8 +419,8 @@ function startServer() {
     }
   });
 
-  server.listen(PORT, "127.0.0.1", () => {
-    console.log(`deepai-proxy listening on http://127.0.0.1:${PORT}`);
+  server.listen(PORT, HOST, () => {
+    console.log(`deepai-proxy listening on http://${HOST}:${PORT}`);
     console.log("  UI       : http://127.0.0.1:" + PORT + "/");
     console.log(`  OpenAI   : POST http://127.0.0.1:${PORT}/v1/chat/completions`);
     console.log(`  Anthropic: POST http://127.0.0.1:${PORT}/v1/messages`);

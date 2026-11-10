@@ -1,0 +1,26 @@
+# Dependencies and build inputs: ui/dist is prebuilt and committed, so the
+# image needs neither npm install nor the Vite toolchain.
+node_modules
+**/node_modules
+ui/package.json
+ui/package-lock.json
+ui/vite.config.js
+ui/index.html
+ui/src
+ui/.tmp-*
+
+# Credentials and local state - mount at runtime, never bake into the image
+acc.json
+accounts.json
+proxy.log
+
+# Git / editor / OS
+.git
+.gitignore
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Docs not needed at runtime
+*.md

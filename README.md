@@ -14,7 +14,7 @@ Docs:
 | file | content |
 |---|---|
 | `HOWIBUILD.md` | how it was reverse-engineered, the real protocol, every design decision, pitfalls, troubleshooting |
-| `DECISIONS.md` | why each choice was made, with the evidence that forced it |
+| `DOCKER.md` | running it in a container |
 | `README.md` | this file — usage |
 
 ---
@@ -22,11 +22,24 @@ Docs:
 ## Quick start
 
 ```bash
-cd "C:/Users/shinm/.deepai-code/scratch/2026-11-10-hi-7122f857"
+node deepai-proxy.mjs import-app    # or: node deepai-proxy.mjs login
+node deepai-proxy.mjs verify        # proves the gateway accepts the fingerprint
+node deepai-proxy.mjs serve         # http://127.0.0.1:8787  (+ the control panel)
+```
 
-node src/main.mjs import-app main   # or: node src/main.mjs login main
-node src/main.mjs verify main       # proves the gateway accepts the fingerprint
-node src/main.mjs serve             # http://127.0.0.1:8787
+## Control panel
+
+`serve` also hosts a panel at <http://127.0.0.1:8787/>. It manages accounts, weights, the
+round-robin toggle, the machine header, sign-in (including pasting a callback URL), import/export,
+usage counters, and a test request.
+
+The panel is a Vite + React + Tailwind app in `ui/`. The build output (`ui/dist`) is committed, so
+the proxy serves it with no build step and no runtime dependencies. Without it the proxy falls back
+to the single-file panel in `src/ui.html`.
+
+```bash
+cd ui && npm install && npm run build   # rebuild ui/dist after editing ui/src
+cd ui && npm run dev                    # hot reload on :5173, proxying /api and /v1 to :8787
 ```
 
 Then:

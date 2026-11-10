@@ -7,6 +7,7 @@ export const ROOT_DIR = path.dirname(SRC_DIR);
 export const ACC_PATH = process.env.ACC_PATH || path.join(ROOT_DIR, "acc.json");
 // Optional second store in the named-account shape used by the src1 build.
 export const ACCOUNTS_PATH = process.env.ACCOUNTS_PATH || path.join(ROOT_DIR, "accounts.json");
+export const HOST = process.env.HOST || "127.0.0.1";
 export const ACCOUNT_NAME = process.env.ACCOUNT || "";
 export const PORT = Number(process.env.PORT || 8787);
 export const PROXY_TOKEN = process.env.PROXY_TOKEN || "";
