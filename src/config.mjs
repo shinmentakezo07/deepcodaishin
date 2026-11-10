@@ -19,6 +19,15 @@ export const LANE_VERSION = 4;
 // DEEPAI_MACHINE_HEADER=1 sends the account digest instead of the local one.
 export const SEND_MACHINE_HEADER = process.env.DEEPAI_MACHINE_HEADER === "1";
 export const LOG_REQUESTS = process.env.LOG_REQUESTS === "1";
+// Extra browser origins allowed to call the panel API, comma separated
+// (e.g. a custom domain in front of a platform hostname). Same-origin is always
+// allowed, so this is only needed for a second hostname.
+export const EXTRA_ORIGINS = new Set(
+  String(process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase().replace(/\/+$/, ""))
+    .filter(Boolean),
+);
 export const DEBUG_HEADERS = process.env.DEBUG_HEADERS === "1";
 
 // The desktop app's own data folder, used by import-app and as a model catalog.

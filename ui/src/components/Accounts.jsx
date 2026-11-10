@@ -221,10 +221,13 @@ export default function AccountsCard({
             />
           </div>
         </div>
-        <div className="mt-2">
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           <Button size="sm" onClick={submitJson} disabled={busy || !json.trim()}>
             Save accounts
           </Button>
+          <span className="text-[10.5px] leading-snug text-slate-500">
+            Auto-capture needs the desktop app on this machine; in a container paste the key instead.
+          </span>
         </div>
       </div>
     </Card>

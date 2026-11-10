@@ -2,7 +2,18 @@ import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { HOST, PORT, MODEL_BASE, PROXY_TOKEN, ACC_PATH, ROOT_DIR, ACCOUNT_NAME, LOG_REQUESTS, SEND_MACHINE_HEADER } from "./config.mjs";
+import {
+  HOST,
+  PORT,
+  MODEL_BASE,
+  PROXY_TOKEN,
+  ACC_PATH,
+  ROOT_DIR,
+  ACCOUNT_NAME,
+  LOG_REQUESTS,
+  SEND_MACHINE_HEADER,
+  EXTRA_ORIGINS,
+} from "./config.mjs";
 import { handleApi } from "./api.mjs";
 import { handleLoginCallback } from "./login.mjs";
 import { MACHINE_HEADER, MACHINE_SOURCE } from "./fingerprint.mjs";
@@ -81,15 +92,40 @@ function isLoopbackHost(host) {
     host === "0.0.0.0" || /^127\./.test(host);
 }
 
+/** The host this request was addressed to, honouring a reverse proxy. */
+function requestHost(req) {
+  const raw = req.headers["x-forwarded-host"] || req.headers.host || "";
+  return String(raw).split(",")[0].trim().toLowerCase();
+}
+
+/**
+ * Same-origin is always allowed.
+ *
+ * The panel is served by this process, so a request whose Origin matches the
+ * Host it arrived on is the panel talking to itself. That covers localhost,
+ * a LAN address, and a platform hostname such as *.up.railway.app behind TLS
+ * termination. Cross-origin requests are still refused, which is what keeps a
+ * random web page from spending the account's credits.
+ */
 function originAllowed(req) {
   const origin = req.headers.origin;
   if (!origin) return true;
   if (origin === "null") return true;
+
+  let parsed;
   try {
-    return isLoopbackHost(new URL(origin).hostname);
+    parsed = new URL(origin);
   } catch {
     return false;
   }
+
+  if (isLoopbackHost(parsed.hostname)) return true;
+
+  const self = requestHost(req);
+  if (self && parsed.host.toLowerCase() === self) return true;
+
+  if (EXTRA_ORIGINS.has(parsed.origin.toLowerCase())) return true;
+  return false;
 }
 
 function escapeHtml(value) {
@@ -105,10 +141,8 @@ function escapeHtml(value) {
 // Allow a local UI served from any loopback host/port to read responses.
 function applyCors(req, res) {
   const origin = req.headers.origin;
-  if (origin && origin !== "null") {
-    try {
-      if (isLoopbackHost(new URL(origin).hostname)) res.setHeader("Access-Control-Allow-Origin", origin);
-    } catch {}
+  if (origin && origin !== "null" && originAllowed(req)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
   }
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");

@@ -65,6 +65,7 @@ docker run -d --name deepai-proxy \
 | `LOG_REQUESTS` | off | Log inbound requests (credentials redacted) |
 | `DEBUG` | off | Log exact upstream JSON bodies |
 | `DEBUG_HEADERS` | off | Log outgoing header set (`api-key` masked) |
+| `ALLOWED_ORIGINS` | *(empty)* | Extra browser origins allowed to call the panel API, comma separated. Same-origin is always allowed, so this is only for a second hostname in front of the platform one |
 
 Per-request account selection: `?account=<name>` > `x-proxy-account` header >
 `ACCOUNT` env > rotation. See `README.md` / `HOWIBUILD.md` for the full protocol.
@@ -86,10 +87,20 @@ cd .. && docker compose up -d --build
 
 ## Notes & caveats
 
-- **Login inside the container works.** The UI flow points the `port` parameter
-  at the panel's own port and `GET /auth-callback` is handled by the main server.
-  Publishing `127.0.0.1:8787` is enough - no ephemeral callback port is needed.
-  If a browser tab still ends on a callback URL, paste it into **Manual sign-in**.
+- **Same-origin behind a proxy works.** The `Origin` guard allows a request whose
+  `Origin` matches the `Host` it arrived on, so the panel works on
+  `*.up.railway.app`, Fly, Render, or a custom domain without configuration.
+  Cross-origin requests are still refused with `403 model transport authentication
+  required`. If you serve the panel from a *second* hostname, add it to
+  `ALLOWED_ORIGINS`.
+- **Login on a remote host needs one manual step.** DeepAI redirects the browser to
+  `http://127.0.0.1:<port>/auth-callback`, which resolves to the *user's* machine, not
+  the server. The tab will fail to load - copy that URL and paste it into **Manual
+  sign-in** in the panel; the exchange then runs server-side and the account is
+  stored. The panel shows a "remote host detected" notice when this applies.
+- **`Auto-capture` needs local app data.** It scans `DEEPAI_USERDATA` for
+  `secrets/deepai-account.bin`. In a container that directory is empty unless you
+  mount `~/.deepai-code/userdata`; otherwise add accounts by pasting a key or JSON.
 - **Persistence:** the compose mount is writable by default so panel changes
   (login, weights, rotation, remove) survive restarts. Add `:ro` to make it
   read-only; the server will still serve requests but writes will fail.

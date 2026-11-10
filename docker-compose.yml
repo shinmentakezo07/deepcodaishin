@@ -24,6 +24,8 @@ services:
       # DEEPAI_MACHINE_ID: "<raw-machine-id>"
       # DEEPAI_API_ORIGIN: "https://api.deepai.org"
       # VERIFY_MODEL: "deepseek-v4.1-flash"
+      # Only needed when the panel is served from a second hostname:
+      # ALLOWED_ORIGINS: "https://panel.example.com"
     volumes:
       # Credential store. Plaintext API keys: treat as passwords, never bake into
       # the image. Remove ":ro" if you want the panel's login/import/remove
