@@ -17,6 +17,7 @@ import {
   findAppAccounts,
   captureAppAccounts,
   findAccount,
+  coolingAccounts,
 } from "./account.mjs";
 import { startLoginFlow, completeLoginFromText, pendingStates } from "./login.mjs";
 import { verifyAccount } from "./verify.mjs";
@@ -291,6 +292,7 @@ async function handleApi(req, res, url, healthPayload) {
       accountCount: accounts.length,
       settings: loadSettings(),
       rotation: rotationState(),
+      cooling: coolingAccounts(),
     });
   }
 

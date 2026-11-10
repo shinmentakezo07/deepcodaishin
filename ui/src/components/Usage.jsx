@@ -94,12 +94,61 @@ export function UsageHero({ usage, online }) {
   );
 }
 
+function PerAccount({ rows }) {
+  const total = (rows || []).reduce((sum, r) => sum + (r.requests || 0), 0);
+  if (!rows || rows.length === 0) {
+    return (
+      <p className="text-[11.5px] text-slate-500">No requests yet this run.</p>
+    );
+  }
+  const max = Math.max(1, ...rows.map((r) => r.requests));
+  return (
+    <ul className="space-y-1.5" aria-label="Requests per account">
+      {rows.map((r) => {
+        const share = total > 0 ? Math.round((r.requests / total) * 100) : 0;
+        return (
+          <li key={r.id || r.name} className="flex items-center gap-2">
+            <span className="w-[7.5rem] shrink-0 truncate font-mono text-[11px] text-slate-300" title={r.name}>
+              {r.name || r.id}
+            </span>
+            <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
+              <span
+                className="block h-full rounded-full bg-blue-400/70"
+                style={{ width: Math.max(2, (r.requests / max) * 100) + "%" }}
+              />
+            </span>
+            <span className="tnum mono w-10 shrink-0 text-right text-[11px] text-slate-200">{r.requests}</span>
+            <span className="tnum w-8 shrink-0 text-right text-[10px] text-slate-500">{share}%</span>
+            {r.rejected ? (
+              <span className="shrink-0 font-mono text-[9.5px] text-rose-400/80" title={r.rejected + " rejected"}>
+                {r.rejected}r
+              </span>
+            ) : (
+              <span className="w-3 shrink-0" />
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export function UsageDetail({ usage }) {
   const u = usage || {};
   return (
     <Card title="Detail" id="detail">
       <RequestMix usage={u} />
-      <dl className="mt-4 grid grid-cols-2 gap-x-6">
+      <div className="mt-4">
+        <div className="mb-1.5 flex items-baseline justify-between">
+          <span className="label">requests per account</span>
+          <span className="tnum mono text-[10.5px] text-slate-500">
+            {(u.perAccount || []).reduce((s, r) => s + (r.requests || 0), 0)} attempts / {u.requests || 0} requests
+          </span>
+        </div>
+        <PerAccount rows={u.perAccount} />
+      </div>
+
+      <dl className="mt-4 grid grid-cols-2 gap-x-6 border-t pt-3" style={{ borderColor: "var(--hairline)" }}>
         <Meta label="chat" value={fmtNum(u.chatRequests)} />
         <Meta label="messages" value={fmtNum(u.messageRequests)} />
         <Meta label="token count" value={fmtNum(u.countTokenRequests)} />

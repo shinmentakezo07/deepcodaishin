@@ -485,6 +485,12 @@ export default function App() {
             <div className="lg:col-span-12">
               <AccountsCard
                 accounts={data.accounts}
+                perAccount={usage ? usage.perAccount : []}
+                totalRequests={
+                  usage && usage.perAccount
+                    ? usage.perAccount.reduce((s, r) => s + (r.requests || 0), 0)
+                    : 0
+                }
                 settings={data.settings}
                 rotation={data.rotation}
                 busy={busy}

@@ -207,12 +207,14 @@ function listAccountSummaries() {
   const single = store.settings.rotation === "single";
   return store.accounts.map((a, index) => ({
     index,
+    id: a.apiKey.slice(-8),
     name: a.name,
     username: a.username,
     isPro: a.isPro,
     weight: a.weight,
     machineId: accountMachineId(a, null).slice(0, 12),
     maskedKey: maskKey(a.apiKey),
+    cooldownSeconds: Math.ceil(coolingMs(a) / 1000),
     active: single ? a.name === store.settings.active : true,
   }));
 }
@@ -378,6 +380,55 @@ let ring = [];
 let ringSignature = "";
 let cursor = 0;
 
+/**
+ * Short cooldown for accounts the gateway just refused.
+ *
+ * Without it, one dead account in the ring costs an extra round trip on every
+ * request that lands on it. A refusal parks the account for a while so the
+ * rotation routes around it; if every account is cooling, they are used anyway
+ * so the proxy can never deadlock itself.
+ */
+const COOLDOWN_MS = Math.max(0, Number(process.env.ACCOUNT_COOLDOWN_MS || 60000));
+const cooldownUntil = new Map();
+
+function accountKey(acc) {
+  const key = acc && acc.apiKey ? String(acc.apiKey) : "";
+  return key ? key.slice(-8) : String((acc && acc.name) || "");
+}
+
+function coolingMs(acc) {
+  if (!COOLDOWN_MS) return 0;
+  const until = cooldownUntil.get(accountKey(acc));
+  if (!until) return 0;
+  const left = until - Date.now();
+  if (left <= 0) {
+    cooldownUntil.delete(accountKey(acc));
+    return 0;
+  }
+  return left;
+}
+
+/** Park an account after the gateway refused it. */
+function markAccountRejected(acc) {
+  if (!COOLDOWN_MS || !acc) return;
+  cooldownUntil.set(accountKey(acc), Date.now() + COOLDOWN_MS);
+}
+
+/** Clear the cooldown once the account answers. */
+function markAccountHealthy(acc) {
+  if (!acc) return;
+  cooldownUntil.delete(accountKey(acc));
+}
+
+function coolingAccounts() {
+  const out = {};
+  for (const a of loadAccounts()) {
+    const ms = coolingMs(a);
+    if (ms > 0) out[accountKey(a)] = Math.ceil(ms / 1000);
+  }
+  return out;
+}
+
 function buildRing(list) {
   const signature = list.map((a) => a.name + ":" + a.weight).join("|");
   if (signature === ringSignature) return ring;
@@ -398,32 +449,65 @@ function accountCount() {
   return loadAccounts().length;
 }
 
+function activeIndex(list, activeName) {
+  const found = list.findIndex((a) => a.name === activeName);
+  return found === -1 ? 0 : found;
+}
+
 /**
- * Next account for a request. "single" pins to the active account; otherwise a
- * weighted ring decides the order.
+ * The accounts this request may use, in order.
+ *
+ * One request consumes exactly one ring slot: the cursor advances once, no
+ * matter how many candidates are tried afterwards. Failover therefore walks
+ * forward through the same rotation instead of skipping slots, which is what
+ * keeps the split proportional when an account is rejected.
+ *
+ * Duplicates are removed because a weighted ring repeats an index (A,A,B).
  */
-function nextAccount() {
+function nextAccountSequence() {
   const store = loadStore();
   const list = store.accounts;
   if (list.length === 0) {
     resetRotation();
-    return null;
+    return [];
   }
+
   if (store.settings.rotation === "single") {
-    const index = Math.max(0, list.findIndex((a) => a.name === store.settings.active));
-    return { ...list[index], index };
+    const index = activeIndex(list, store.settings.active);
+    return [{ ...list[index], index }];
   }
+
   const schedule = buildRing(list);
-  if (schedule.length === 0) return { ...list[0], index: 0 };
-  const index = schedule[cursor % schedule.length];
+  if (schedule.length === 0) return [{ ...list[0], index: 0 }];
+
+  const start = cursor % schedule.length;
   cursor = (cursor + 1) % schedule.length;
-  return { ...list[index], index };
+
+  const sequence = [];
+  const parked = [];
+  for (let k = 0; k < schedule.length; k += 1) {
+    const index = schedule[(start + k) % schedule.length];
+    if (sequence.some((entry) => entry.index === index) || parked.some((e) => e.index === index)) continue;
+    const entry = { ...list[index], index };
+    if (coolingMs(entry) > 0) parked.push(entry);
+    else sequence.push(entry);
+  }
+
+  // Everything is cooling: use them anyway rather than fail without trying.
+  return sequence.length > 0 ? sequence : parked;
+}
+
+/** The single account a request would use next, or null. */
+function nextAccount() {
+  const sequence = nextAccountSequence();
+  return sequence.length ? sequence[0] : null;
 }
 
 function rotationState() {
   const store = loadStore();
   const list = store.accounts;
-  const schedule = store.settings.rotation === "single" ? [0] : buildRing(list);
+  const single = store.settings.rotation === "single";
+  const schedule = single ? [activeIndex(list, store.settings.active)] : buildRing(list);
   const nextIndex = schedule.length ? schedule[cursor % schedule.length] : 0;
   return {
     total: list.length,
@@ -519,6 +603,10 @@ export {
   accountMachineId,
   accountAffinity,
   nextAccount,
+  nextAccountSequence,
+  markAccountRejected,
+  markAccountHealthy,
+  coolingAccounts,
   rotationState,
   resetRotation,
   findAppAccounts,

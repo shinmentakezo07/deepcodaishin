@@ -1,7 +1,13 @@
 import { MODEL_BASE, DEBUG_HEADERS, SEND_MACHINE_HEADER } from "./config.mjs";
 import { fingerprintHeaders } from "./fingerprint.mjs";
-import { nextAccount, accountCount, loadSettings } from "./account.mjs";
-import { recordAccount } from "./metrics.mjs";
+import {
+  nextAccountSequence,
+  accountCount,
+  loadSettings,
+  markAccountRejected,
+  markAccountHealthy,
+} from "./account.mjs";
+import { recordAccount, recordRejection } from "./metrics.mjs";
 
 // ---------------------------------------------------------------- upstream
 
@@ -86,21 +92,25 @@ function postOnce(account, body, affinity, signal) {
  * network failure moves on to the next one, up to one attempt per account.
  */
 async function upstreamFetch(payload, { affinity, signal, account } = {}) {
-  const total = accountCount();
-  if (total === 0) throw Object.assign(new Error("not signed in"), { status: 401 });
+  if (accountCount() === 0) throw Object.assign(new Error("not signed in"), { status: 401 });
 
   const body = debugBody(upstreamPayload(payload));
 
   if (account) {
-    recordAccount(account.name || "account");
-    return postOnce(account, body, affinity, signal);
+    recordAccount(account);
+    const pinned = await postOnce(account, body, affinity, signal);
+    if (pinned.ok) markAccountHealthy(account);
+    return pinned;
   }
 
+  // The sequence is the rotation from the current slot onwards. Exactly one slot
+  // is consumed per request; failover only walks forward inside that sequence.
+  const candidates = nextAccountSequence();
   let res = null;
-  for (let attempt = 0; attempt < total; attempt += 1) {
-    const acc = nextAccount();
-    if (!acc) break;
-    recordAccount(acc.name || "account " + (acc.index + 1));
+
+  for (let attempt = 0; attempt < candidates.length; attempt += 1) {
+    const acc = candidates[attempt];
+    recordAccount(acc);
     try {
       res = await postOnce(acc, body, affinity, signal);
     } catch (err) {
@@ -108,8 +118,13 @@ async function upstreamFetch(payload, { affinity, signal, account } = {}) {
       res = null;
       continue;
     }
-    if (!isRetryable(res.status)) return res;
-    if (attempt < total - 1) {
+    if (!isRetryable(res.status)) {
+      markAccountHealthy(acc);
+      return res;
+    }
+    recordRejection(acc);
+    markAccountRejected(acc);
+    if (attempt < candidates.length - 1) {
       try {
         await res.body.cancel();
       } catch {}

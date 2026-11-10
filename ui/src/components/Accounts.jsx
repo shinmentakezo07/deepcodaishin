@@ -42,8 +42,26 @@ function Stepper({ value, onChange, disabled, label }) {
   );
 }
 
+function RequestChip({ count, rejected, share }) {
+  if (!count) {
+    return <span className="font-mono text-[10.5px] text-slate-600">0 req</span>;
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-1 font-mono text-[10.5px] text-slate-400"
+      title={count + " requests" + (rejected ? ", " + rejected + " rejected" : "") + (share ? ", " + share + " of traffic" : "")}
+    >
+      <span aria-hidden="true" className="h-1 w-1 rounded-full bg-blue-400/70" />
+      <span className="tnum text-slate-300">{count}</span> req
+      {rejected ? <span className="text-rose-400/80">/{rejected} rej</span> : null}
+    </span>
+  );
+}
+
 export default function AccountsCard({
   accounts,
+  perAccount,
+  totalRequests,
   settings,
   rotation,
   busy,
@@ -60,6 +78,9 @@ export default function AccountsCard({
 }) {
   const [json, setJson] = useState("");
   const single = settings.rotation === "single";
+  const usageFor = (a) =>
+    (perAccount || []).find((u) => u.id === a.id) ||
+    (perAccount || []).find((u) => u.name === a.name);
   const nextName = rotation ? rotation.nextName : null;
 
   function readFile(event) {
@@ -143,10 +164,27 @@ export default function AccountsCard({
                       active
                     </span>
                   ) : null}
+                  {a.cooldownSeconds > 0 ? (
+                    <span
+                      className="rounded border border-amber-400/40 bg-amber-400/10 px-1 py-px text-[9.5px] font-bold uppercase text-amber-300"
+                      title={"Refused a request - skipped for " + a.cooldownSeconds + "s"}
+                    >
+                      cooling {a.cooldownSeconds}s
+                    </span>
+                  ) : null}
                 </div>
-                {a.machineId ? (
-                  <div className="font-mono text-[10.5px] text-slate-500">machine {a.machineId}...</div>
-                ) : null}
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 font-mono text-[10.5px] text-slate-500">
+                  {a.machineId ? <span>machine {a.machineId}...</span> : null}
+                  <RequestChip
+                    count={(usageFor(a) || {}).requests || 0}
+                    rejected={(usageFor(a) || {}).rejected || 0}
+                    share={
+                      totalRequests > 0 && (usageFor(a) || {}).requests
+                        ? Math.round(((usageFor(a) || {}).requests / totalRequests) * 100) + "%"
+                        : ""
+                    }
+                  />
+                </div>
               </div>
 
               <div className="flex items-center gap-1.5">
