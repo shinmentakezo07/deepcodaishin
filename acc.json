@@ -1,5 +1,48 @@
 {
+  "active": "deltaapoc317",
   "apiKey": "b37c0c17-6923-42ce-8b50-6dd1b4aae5bc",
   "username": "deltaapoc317",
-  "isPro": false
+  "isPro": false,
+  "settings": {
+    "rotation": "round-robin",
+    "active": "deltaapoc317",
+    "sendMachineHeader": false
+  },
+  "accounts": [
+    {
+      "name": "deltaapoc317",
+      "apiKey": "b37c0c17-6923-42ce-8b50-6dd1b4aae5bc",
+      "username": "deltaapoc317",
+      "isPro": false,
+      "weight": 1
+    },
+    {
+      "name": "kmissom",
+      "apiKey": "de20faa7-18b5-4c03-9957-a272b11e68a2",
+      "username": "kmissom",
+      "isPro": false,
+      "weight": 1
+    },
+    {
+      "name": "ayogikla822",
+      "apiKey": "a7d99514-d866-432d-8f97-c3f928371d45",
+      "username": "ayogikla822",
+      "isPro": false,
+      "weight": 1
+    },
+    {
+      "name": "orahoraloa31",
+      "apiKey": "e436dd66-3517-449e-be1f-5bc6b8d7a0f1",
+      "username": "orahoraloa31",
+      "isPro": false,
+      "weight": 1
+    },
+    {
+      "name": "orahoraloa31-2",
+      "apiKey": "395249a1-35cf-4d7a-9ad3-09c7595420d6",
+      "username": "orahoraloa31",
+      "isPro": false,
+      "weight": 1
+    }
+  ]
 }

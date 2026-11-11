@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { STOP_MAP } from "./openai-to-anthropic.mjs";
 import { recordUsage } from "./metrics.mjs";
+import { streamFailureMessage } from "./stream-guard.mjs";
 
 function sseChunk(text) {
   return `event: ${text.event}\ndata: ${JSON.stringify(text.data)}\n\n`;
@@ -92,6 +93,16 @@ function openAIToAnthropicStream(upstreamBody, model, res) {
   };
 
   const handleChunk = (json) => {
+    // An in-band error frame ends the turn early. Surfacing it (rather than
+    // ignoring it, which truncated the answer silently) keeps the failure
+    // visible, and the 5xx prefix keeps it retryable for the caller.
+    if (json?.error) {
+      const detail =
+        typeof json.error === "object" && json.error !== null && typeof json.error.message === "string"
+          ? json.error.message
+          : String(json.error);
+      throw new Error(streamFailureMessage(detail));
+    }
     if (json?.id) id = json.id;
     if (json?.usage) {
       usage = {
@@ -176,9 +187,15 @@ function openAIToAnthropicStream(upstreamBody, model, res) {
             if (!line) continue;
             const data = line.slice(5).trim();
             if (!data || data === "[DONE]") continue;
+            // Parse failures are the upstream's business; handleChunk's own
+            // errors (a terminal error frame) must reach the catch below.
+            let json;
             try {
-              handleChunk(JSON.parse(data));
-            } catch {}
+              json = JSON.parse(data);
+            } catch {
+              continue;
+            }
+            handleChunk(json);
           }
           if (needDrain) {
             needDrain = false;
@@ -192,9 +209,13 @@ function openAIToAnthropicStream(upstreamBody, model, res) {
             if (!line.startsWith("data:")) continue;
             const data = line.slice(5).trim();
             if (!data || data === "[DONE]") continue;
+            let json;
             try {
-              handleChunk(JSON.parse(data));
-            } catch {}
+              json = JSON.parse(data);
+            } catch {
+              continue;
+            }
+            handleChunk(json);
           }
         }
         ensureStart({ prompt_tokens: usage.input_tokens });

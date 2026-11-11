@@ -32,7 +32,8 @@ import { catalogIds } from "./models.mjs";
 import { upstreamFetch, upstreamErrorMessage } from "./upstream.mjs";
 import { anthropicToOpenAI } from "./anthropic-to-openai.mjs";
 import { openAIToAnthropic } from "./openai-to-anthropic.mjs";
-import { aggregateStream, tapStreamUsage } from "./stream-aggregate.mjs";
+import { aggregateStream } from "./stream-aggregate.mjs";
+import { relayGuarded } from "./stream-guard.mjs";
 import { openAIToAnthropicStream } from "./anthropic-stream.mjs";
 import { recordRequest, recordUsage, recordError } from "./metrics.mjs";
 
@@ -333,10 +334,18 @@ async function handleChatCompletions(req, res, account) {
     }
 
     beginEventStream(res);
-    for await (const chunk of tapStreamUsage(up.body, (usage, model) => recordUsage(usage, model || payload.model))) {
-      if (res.destroyed || res.writableEnded) break;
-      if (!res.write(chunk)) await drained(res);
-    }
+    // Relay the stream unchanged except for a terminal upstream failure, which
+    // is rewritten into a retryable 5xx so the client retries the turn instead
+    // of abandoning it (see stream-guard.mjs).
+    const relay = await relayGuarded(up.body, {
+      write: async (chunk) => {
+        if (res.destroyed || res.writableEnded) return false;
+        if (!res.write(chunk)) await drained(res);
+        return true;
+      },
+      onUsage: (usage, model) => recordUsage(usage, model || payload.model),
+    });
+    if (relay.error) recordError();
   } catch (err) {
     if (!isAbortError(err, abort.signal)) throw err;
   } finally {
