@@ -1,7 +1,32 @@
 const JSON_HEADERS = { "Content-Type": "application/json" };
+const TOKEN_KEY = "deepai-proxy-token";
+
+export function getToken() {
+  try {
+    return window.localStorage.getItem(TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setToken(token) {
+  try {
+    if (token) window.localStorage.setItem(TOKEN_KEY, token);
+    else window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* private mode: the token only lives for this page load */
+  }
+}
+
+/** 401 from the server when PROXY_TOKEN is set and we sent nothing (or a stale one). */
+export function isAuthError(err) {
+  return !!err && err.status === 401;
+}
 
 async function request(path, options) {
-  const init = Object.assign({ headers: JSON_HEADERS }, options || {});
+  const token = getToken();
+  const headers = token ? Object.assign({ Authorization: "Bearer " + token }, JSON_HEADERS) : JSON_HEADERS;
+  const init = Object.assign({ headers }, options || {});
   const res = await fetch(path, init);
   const text = await res.text();
   let data;
@@ -17,6 +42,7 @@ async function request(path, options) {
       "HTTP " + res.status;
     const err = new Error(message);
     err.status = res.status;
+    if (res.status === 401) err.auth = true;
     err.data = data;
     throw err;
   }

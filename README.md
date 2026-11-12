@@ -118,10 +118,10 @@ path.
 | `ACCOUNTS_PATH` | `./accounts.json` | multi-account store |
 | `ACC_PATH` | `./acc.json` | mirror of the active account |
 | `ACCOUNT` | `active` from the store | default account |
-| `PROXY_TOKEN` | *(empty)* | require `Authorization: Bearer <token>` |
+| `PROXY_TOKEN` | *(empty)* | require `Authorization: Bearer <token>` on `/api/*` and `/v1/*` (`/health`, `/v1/models`, the panel itself stay public; the panel asks for the token once and keeps it in `localStorage`) |
 | `DEEPAI_API_ORIGIN` | `https://api.deepai.org` | origin override |
 | `DEEPAI_USERDATA` | `~/.deepai-code/userdata` | source for `import-app` and the model catalog |
-| `DEEPAI_MACHINE_HEADER` | on (`0` disables) | send `X-DeepAI-Code-Machine` |
+| `DEEPAI_MACHINE_HEADER` | off (`1` enables) | send `X-DeepAI-Code-Machine` (per-account digest) |
 | `DEEPAI_MACHINE_ID` | auto | raw id to hash into the machine header |
 | `DEEPAI_SESSION_AFFINITY` | per account | force one affinity value |
 | `STORE_CACHE_TTL_MS` | `250` | how long the parsed account store is reused before the files are re-stat'ed; `0` re-reads on every call |
@@ -129,17 +129,17 @@ path.
 | `LOG_REQUESTS` | off | log inbound requests, credentials redacted |
 | `DEBUG` | off | log the exact upstream JSON body |
 | `DEBUG_HEADERS` | off | log the exact outgoing header set, key masked |
+| `ALLOWED_ORIGINS` | *(empty)* | extra browser origins allowed to call the panel API (comma separated) |
 
 ---
 
 ## Files
 
 ```
-deepai-proxy.mjs            original single-file build (reference only; src/ is the live code)
+deepai-proxy.mjs            CLI entry point: command dispatch (login, import-app, accounts, use, verify, whoami, serve)
 src/
-├── main.mjs                command dispatch
 ├── config.mjs              env + paths
-├── account.mjs             accounts.json store, per-account machine id + affinity
+├── account.mjs             accounts.json store, per-account machine id + affinity, rotation
 ├── login.mjs               desktop auth flow, exchange, import-app
 ├── fingerprint.mjs         lane / instance / machine / affinity headers
 ├── models.mjs              catalog ids
@@ -148,7 +148,12 @@ src/
 ├── openai-to-anthropic.mjs response translation
 ├── stream-aggregate.mjs    SSE -> single chat.completion
 ├── anthropic-stream.mjs    OpenAI SSE -> Anthropic SSE
-└── verify.mjs              live fingerprint check
+├── stream-guard.mjs        relay upstream SSE, rewrite early termination as retryable 502
+├── http-server.mjs         HTTP router + handlers + keep-alive
+├── api.mjs                 /api/* control-panel endpoints
+├── metrics.mjs             request/usage counters (per account)
+├── verify.mjs              live fingerprint check
+└── ui.html                 single-file panel fallback
 accounts.json               credential store (0600)
 acc.json                    mirror of the active account
 ```

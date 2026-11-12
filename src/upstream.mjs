@@ -99,6 +99,7 @@ async function upstreamFetch(payload, { affinity, signal, account } = {}) {
   if (account) {
     recordAccount(account);
     const pinned = await postOnce(account, body, affinity, signal);
+    pinned.account = account;
     if (pinned.ok) markAccountHealthy(account);
     return pinned;
   }
@@ -119,6 +120,7 @@ async function upstreamFetch(payload, { affinity, signal, account } = {}) {
       continue;
     }
     if (!isRetryable(res.status)) {
+      res.account = acc;
       markAccountHealthy(acc);
       return res;
     }

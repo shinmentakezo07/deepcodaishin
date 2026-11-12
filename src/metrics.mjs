@@ -56,7 +56,12 @@ function recordAccount(acc) {
   entry.lastAt = new Date().toISOString();
 }
 
-function recordUsage(usage, model) {
+/**
+ * Usage and errors are attributed to the account of *this* request, which the
+ * caller passes explicitly. A module-global "last account used" is wrong as
+ * soon as two requests overlap: the loser's tokens land on the winner.
+ */
+function recordUsage(usage, model, acc) {
   if (!usage) return;
   const prompt = usage.prompt_tokens ?? usage.input_tokens;
   const completion = usage.completion_tokens ?? usage.output_tokens;
@@ -64,8 +69,9 @@ function recordUsage(usage, model) {
   if (Number.isFinite(completion)) state.completionTokens += completion;
   if (model) state.lastModel = model;
 
-  if (lastAccountId) {
-    const entry = perAccount.get(lastAccountId);
+  const id = acc ? accountId(acc) : lastAccountId;
+  if (id) {
+    const entry = perAccount.get(id);
     if (entry) {
       if (Number.isFinite(prompt)) entry.promptTokens += prompt;
       if (Number.isFinite(completion)) entry.completionTokens += completion;
@@ -73,10 +79,11 @@ function recordUsage(usage, model) {
   }
 }
 
-function recordError() {
+function recordError(acc) {
   state.errors += 1;
-  if (lastAccountId) {
-    const entry = perAccount.get(lastAccountId);
+  const id = acc ? accountId(acc) : lastAccountId;
+  if (id) {
+    const entry = perAccount.get(id);
     if (entry) entry.errors += 1;
   }
 }

@@ -316,7 +316,7 @@ async function handleChatCompletions(req, res, account) {
     const up = await upstreamFetch(payload, { affinity, account, signal: abort.signal });
 
     if (!up.ok) {
-      recordError();
+      recordError(up.account);
       const text = await up.text().catch(() => "");
       return json(res, up.status, {
         error: {
@@ -329,7 +329,7 @@ async function handleChatCompletions(req, res, account) {
 
     if (!wantsStream) {
       const agg = await aggregateStream(up.body, payload.model);
-      recordUsage(agg.usage, payload.model);
+      recordUsage(agg.usage, payload.model, up.account);
       return json(res, 200, agg);
     }
 
@@ -343,9 +343,9 @@ async function handleChatCompletions(req, res, account) {
         if (!res.write(chunk)) await drained(res);
         return true;
       },
-      onUsage: (usage, model) => recordUsage(usage, model || payload.model),
+      onUsage: (usage, model) => recordUsage(usage, model || payload.model, up.account),
     });
-    if (relay.error) recordError();
+    if (relay.error) recordError(up.account);
   } catch (err) {
     if (!isAbortError(err, abort.signal)) throw err;
   } finally {
@@ -380,7 +380,7 @@ async function handleMessages(req, res, account) {
     });
 
     if (!up.ok) {
-      recordError();
+      recordError(up.account);
       const text = await up.text().catch(() => "");
       return json(
         res,
@@ -391,12 +391,12 @@ async function handleMessages(req, res, account) {
 
     if (!wantsStream) {
       const body = await aggregateStream(up.body, input.model);
-      recordUsage(body.usage, input.model);
+      recordUsage(body.usage, input.model, up.account);
       return json(res, 200, openAIToAnthropic(body, input.model));
     }
 
     beginEventStream(res);
-    await openAIToAnthropicStream(up.body, input.model, res);
+    await openAIToAnthropicStream(up.body, input.model, res, up.account);
   } catch (err) {
     if (!isAbortError(err, abort.signal)) throw err;
   } finally {
@@ -561,14 +561,19 @@ function startServer() {
         return res.end(body);
       }
 
+      // The panel API mutates the credential store and the rotation settings,
+      // so it is guarded by the same token as the model endpoints. The origin
+      // check alone cannot cover it: /health is public and carries the whole
+      // account list, and originAllowed() trusts any loopback Origin.
+      if (!authorized(req)) {
+        return json(res, 401, errBody("invalid proxy token", "authentication_error"));
+      }
+
       if (url.pathname.startsWith("/api/")) {
         return await handleApi(req, res, url, healthPayload);
       }
 
       if (req.method !== "POST") return json(res, 404, errBody("not found", "not_found_error"));
-      if (!authorized(req)) {
-        return json(res, 401, errBody("invalid proxy token", "authentication_error"));
-      }
 
       if (url.pathname === "/v1/chat/completions") return await handleChatCompletions(req, res, pickAccount(req, url));
       if (url.pathname === "/v1/messages") return await handleMessages(req, res, pickAccount(req, url));

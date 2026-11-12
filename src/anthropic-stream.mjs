@@ -11,7 +11,7 @@ function sseChunk(text) {
  * OpenAI SSE -> Anthropic SSE.
  * Text goes in block 0 unless a thinking block opens first; tool calls follow.
  */
-function openAIToAnthropicStream(upstreamBody, model, res) {
+function openAIToAnthropicStream(upstreamBody, model, res, account) {
   const dec = new TextDecoder();
   let buf = "";
   let started = false;
@@ -166,10 +166,30 @@ function openAIToAnthropicStream(upstreamBody, model, res) {
     if (choice.finish_reason) finish = choice.finish_reason;
   };
 
+  // Terminal bookkeeping. A stream that ends without a finish_reason frame was
+  // cut off upstream, and must surface as an error event rather than a
+  // completed message: "end_turn" on a truncated answer is a silent data loss.
+  const terminate = (stopReason) => {
+    ensureStart({ prompt_tokens: usage.input_tokens });
+    closeThinking();
+    closeText();
+    for (const entry of toolBlocks.values()) {
+      write("content_block_stop", { type: "content_block_stop", index: entry.blockIndex });
+    }
+    write("message_delta", {
+      type: "message_delta",
+      delta: { stop_reason: stopReason, stop_sequence: null },
+      usage: { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens },
+    });
+    recordUsage(usage, model, account);
+    write("message_stop", { type: "message_stop" });
+  };
+
   return new Promise((resolve) => {
     void (async () => {
       try {
         let stopped = false;
+        let sawFinish = false;
         for await (const chunk of upstreamBody) {
           // Stop pulling from upstream the moment the caller is gone.
           if (res.writableEnded || res.destroyed) {
@@ -196,6 +216,7 @@ function openAIToAnthropicStream(upstreamBody, model, res) {
               continue;
             }
             handleChunk(json);
+            if (finish) sawFinish = true;
           }
           if (needDrain) {
             needDrain = false;
@@ -216,21 +237,13 @@ function openAIToAnthropicStream(upstreamBody, model, res) {
               continue;
             }
             handleChunk(json);
+            if (finish) sawFinish = true;
           }
         }
-        ensureStart({ prompt_tokens: usage.input_tokens });
-        closeThinking();
-        closeText();
-        for (const entry of toolBlocks.values()) {
-          write("content_block_stop", { type: "content_block_stop", index: entry.blockIndex });
+        if (!stopped && !sawFinish) {
+          throw new Error(streamFailureMessage("upstream closed the stream without a finish frame"));
         }
-        write("message_delta", {
-          type: "message_delta",
-          delta: { stop_reason: STOP_MAP[finish] || "end_turn", stop_sequence: null },
-          usage: { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens },
-        });
-        recordUsage(usage, model);
-        write("message_stop", { type: "message_stop" });
+        terminate(STOP_MAP[finish] || "end_turn");
       } catch (err) {
         write("error", { type: "error", error: { type: "api_error", message: String(err?.message || err) } });
       } finally {

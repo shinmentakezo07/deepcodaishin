@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { api, cx, fmtUptime } from "./api.js";
-import { Pill, Toasts, Button } from "./components/ui.jsx";
+import { api, cx, fmtUptime, getToken, setToken, isAuthError } from "./api.js";
+import { Pill, Toasts, Button, Field, inputClass } from "./components/ui.jsx";
 import RotationCard from "./components/Rotation.jsx";
 import AccountsCard from "./components/Accounts.jsx";
 import LoginCard from "./components/Login.jsx";
@@ -71,6 +71,9 @@ export default function App() {
   const [loginName, setLoginName] = useState("");
   const [toasts, setToasts] = useState([]);
   const [online, setOnline] = useState(true);
+  // PROXY_TOKEN is set on the server: every /api and /v1 call needs the bearer,
+  // so the panel asks for it once and keeps it in localStorage.
+  const [needsToken, setNeedsToken] = useState(false);
 
   const revisionRef = useRef(0);
   const toastId = useRef(0);
@@ -99,12 +102,25 @@ export default function App() {
     });
   }, []);
 
+  const login = useCallback(async () => {
+    try {
+      apply(await api.accounts());
+      setNeedsToken(false);
+      refreshUsage();
+      loadModels();
+    } catch (err) {
+      if (isAuthError(err)) setNeedsToken(true);
+      else toast("Could not load accounts: " + err.message, "err");
+    }
+  }, [apply, refreshUsage, loadModels, toast]);
+
   const refreshAccounts = useCallback(async () => {
     try {
       apply(await api.accounts());
       return true;
     } catch (err) {
-      toast("Could not load accounts: " + err.message, "err");
+      if (isAuthError(err)) setNeedsToken(true);
+      else toast("Could not load accounts: " + err.message, "err");
       return false;
     }
   }, [apply, toast]);
@@ -115,7 +131,11 @@ export default function App() {
       setHealth(h);
       setOnline(true);
       return h;
-    } catch {
+    } catch (err) {
+      if (isAuthError(err)) {
+        setNeedsToken(true);
+        return null;
+      }
       setOnline(false);
       setHealth(null);
       return null;
@@ -537,7 +557,55 @@ export default function App() {
       </div>
 
       <CommandPalette commands={commands} open={paletteOpen} setOpen={setPaletteOpen} />
+      {needsToken ? <TokenGate onDone={login} /> : null}
       <Toasts items={toasts} onDismiss={dismiss} />
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- token gate */
+
+function TokenGate({ onDone }) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-[#03060c]/85 p-4 backdrop-blur-sm">
+      <form
+        className="glass w-full max-w-sm rounded-2xl p-5"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setError("");
+          setToken(value.trim());
+          await onDone();
+          setBusy(false);
+        }}
+      >
+        <h2 className="text-[12px] font-semibold uppercase tracking-[0.16em] text-slate-300">Proxy token required</h2>
+        <p className="mt-2 text-[12.5px] leading-relaxed text-slate-400">
+          This server runs with <code className="font-mono text-slate-300">PROXY_TOKEN</code> set. Paste it to manage accounts.
+        </p>
+        <div className="mt-3">
+          <Field label="Token">
+            <input
+              className={inputClass}
+              type="password"
+              autoFocus
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="PROXY_TOKEN"
+            />
+          </Field>
+        </div>
+        {error ? <p className="mt-2 text-[11.5px] text-rose-300">{error}</p> : null}
+        <div className="mt-4 flex justify-end">
+          <Button type="submit" size="sm" disabled={busy || !value.trim()}>
+            {busy ? "Checking..." : "Unlock"}
+          </Button>
+        </div>
+      </form>
     </div>
   );
 }
