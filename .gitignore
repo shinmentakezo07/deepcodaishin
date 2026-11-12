@@ -12,3 +12,6 @@ node_modules/
 # local credential store - never commit
 acc.json
 accounts.json
+
+# local debug/scratch artifacts
+.debug/

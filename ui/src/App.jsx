@@ -102,18 +102,6 @@ export default function App() {
     });
   }, []);
 
-  const login = useCallback(async () => {
-    try {
-      apply(await api.accounts());
-      setNeedsToken(false);
-      refreshUsage();
-      loadModels();
-    } catch (err) {
-      if (isAuthError(err)) setNeedsToken(true);
-      else toast("Could not load accounts: " + err.message, "err");
-    }
-  }, [apply, refreshUsage, loadModels, toast]);
-
   const refreshAccounts = useCallback(async () => {
     try {
       apply(await api.accounts());
@@ -158,6 +146,18 @@ export default function App() {
       toast("Could not load models: " + err.message, "err");
     }
   }, [toast]);
+
+  const login = useCallback(async () => {
+    try {
+      apply(await api.accounts());
+      setNeedsToken(false);
+      refreshUsage();
+      loadModels();
+    } catch (err) {
+      if (isAuthError(err)) setNeedsToken(true);
+      else toast("Could not load accounts: " + err.message, "err");
+    }
+  }, [apply, refreshUsage, loadModels, toast]);
 
   useEffect(() => {
     refreshHealth().then(refreshAccounts);
