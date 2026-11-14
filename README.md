@@ -71,7 +71,8 @@ Stop it with `taskkill //F //PID <pid>` (the pid is printed at startup; find it 
 | `import-app [name]` | copy the credential the desktop app already has in `~/.deepai-code/userdata/secrets/deepai-account.bin` |
 | `accounts` | list accounts, active flag, per-account machine digest |
 | `use <name>` | switch the active account |
-| `verify [name]` | print the outgoing headers, call `/theos` + one 8-token streamed chat; exits non-zero on rejection |
+| `verify [name]` | print the outgoing headers + the discovered lane, call `/theos` + one 8-token streamed chat; exits non-zero on rejection |
+| `lane` | re-discover the lane version the gateway currently serves (and the current app version) and print it |
 | `whoami [name]` | masked key, machine digest, store path |
 
 ---
@@ -124,6 +125,10 @@ path.
 | `DEEPAI_MACHINE_HEADER` | off (`1` enables) | send `X-DeepAI-Code-Machine` (per-account digest) |
 | `DEEPAI_MACHINE_ID` | auto | raw id to hash into the machine header |
 | `DEEPAI_SESSION_AFFINITY` | per account | force one affinity value |
+| `DEEPAI_LANE_VERSION` | `6` | seed for lane discovery — the lane is discovered from the gateway, not assumed |
+| `DEEPAI_LANE_AUTODISCOVER` | on (`0` pins the seed) | stop probing the gateway; `426 lane_version_unsupported` is then surfaced as-is |
+| `DEEPAI_LANE_REFRESH_MS` | `900000` | how long a discovered lane is trusted before a background re-probe (a `426` always forces one) |
+| `DEEPAI_APP_VERSION` | `0.3.37` | fallback `v=` for the check-in beacon; the live release is read from the download redirect |
 | `STORE_CACHE_TTL_MS` | `250` | how long the parsed account store is reused before the files are re-stat'ed; `0` re-reads on every call |
 | `KEEPALIVE_TIMEOUT_MS` | `65000` | how long an idle client connection is kept open for reuse (Node's default of 5s is shorter than the pause between chat turns) |
 | `LOG_REQUESTS` | off | log inbound requests, credentials redacted |
@@ -141,7 +146,8 @@ src/
 ├── config.mjs              env + paths
 ├── account.mjs             accounts.json store, per-account machine id + affinity, rotation
 ├── login.mjs               desktop auth flow, exchange, import-app
-├── fingerprint.mjs         lane / instance / machine / affinity headers
+├── fingerprint.mjs         instance / machine / affinity headers, header set
+├── lane.mjs                lane discovery, background refresh, check-in beacon
 ├── models.mjs              catalog ids
 ├── upstream.mjs            payload normalisation + upstream fetch
 ├── anthropic-to-openai.mjs request translation

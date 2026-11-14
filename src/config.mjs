@@ -13,12 +13,22 @@ export const PORT = Number(process.env.PORT || 8787);
 export const PROXY_TOKEN = process.env.PROXY_TOKEN || "";
 export const API_ORIGIN = (process.env.DEEPAI_API_ORIGIN || "https://api.deepai.org").replace(/\/+$/, "");
 export const MODEL_BASE = API_ORIGIN + "/deepai_code";
-export const LANE_VERSION = 6;
-// DeepAI Code desktop release this fingerprint mirrors (0.3.37 ships lane 6;
-// the gateway answers 426 lane_version_unsupported to older lanes).
-export const APP_VERSION = "0.3.37";
-// Telemetry beacon the app attaches to /theos check-ins: v=<app>;up=<uptime>;pi;focus.
-export const DEEPAI_BEACON = `v=${APP_VERSION};up=0;pi=0;focus=0`;
+// The lane the gateway is known to serve. This is only a *seed*: lane.mjs
+// discovers the live value from the gateway (the app's X-DeepAI-Code-Theos
+// header changes whenever DeepAI retires a release) and keeps it current in the
+// running process, so a bump does not need a restart or an edit here.
+export const LANE_VERSION = Number(process.env.DEEPAI_LANE_VERSION || 6);
+// Set DEEPAI_LANE_AUTODISCOVER=0 to pin LANE_VERSION and never probe.
+export const LANE_AUTODISCOVER = process.env.DEEPAI_LANE_AUTODISCOVER !== "0";
+// How long a discovered lane is trusted before it is re-probed in the background.
+export const LANE_REFRESH_MS = Number(process.env.DEEPAI_LANE_REFRESH_MS || 15 * 60 * 1000);
+// Upper bound for the discovery walk; the gateway has never served anything near it.
+export const LANE_MAX = 64;
+// Fallback app version for the check-in beacon until the live one is fetched.
+export const APP_VERSION = process.env.DEEPAI_APP_VERSION || "0.3.37";
+export const APP_VERSION_TTL_MS = 6 * 60 * 60 * 1000;
+// Redirects to the current release file, e.g. DeepAI-Code-0.3.37-x86_64.AppImage.
+export const DOWNLOAD_PROBE_URL = "https://deepai.org/download/deepai-code/linux-x64";
 // Off by default: the local digest is the value the gateway rejected on this
 // machine. Each account still carries its own digest (see account.mjs), so
 // DEEPAI_MACHINE_HEADER=1 sends the account digest instead of the local one.

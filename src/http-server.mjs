@@ -17,6 +17,7 @@ import {
 import { handleApi } from "./api.mjs";
 import { handleLoginCallback } from "./login.mjs";
 import { MACHINE_HEADER, MACHINE_SOURCE } from "./fingerprint.mjs";
+import { laneInfo, warm } from "./lane.mjs";
 import {
   listAccounts,
   listAccountSummaries,
@@ -62,6 +63,7 @@ function healthPayload() {
       active: a.active,
       machine: accountMachineId(a, MACHINE_HEADER).slice(0, 12) + "...",
     })),
+    lane: laneInfo(),
     machine: MACHINE_HEADER ? "present (" + MACHINE_SOURCE + ")" : "absent",
     sendMachineHeader: SEND_MACHINE_HEADER || loadSettings().sendMachineHeader === true,
     upstream: MODEL_BASE,
@@ -503,6 +505,10 @@ function startServer() {
   if (accountCount() === 0) {
     console.error(`warning: no credential at ${ACC_PATH} yet - run "login" or "import-app", or use the UI`);
   }
+  // Learn the served lane (and the current app version for the check-in beacon)
+  // before the first request. Non-blocking: a cold start must not wait on it.
+  warm().catch(() => {});
+
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", `http://127.0.0.1:${PORT}`);

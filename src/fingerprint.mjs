@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
-import { LANE_VERSION, SEND_MACHINE_HEADER } from "./config.mjs";
+import { SEND_MACHINE_HEADER } from "./config.mjs";
 import { accountAffinity, accountMachineId } from "./account.mjs";
+import { currentLane } from "./lane.mjs";
 
 // ---------------------------------------------------------------- fingerprint
 
@@ -83,6 +84,9 @@ const SESSION_AFFINITY = process.env.DEEPAI_SESSION_AFFINITY || crypto.randomUUI
 /**
  * Build the outgoing header set.
  *
+ * The lane header is read from lane.mjs on every call, so a lane bump the
+ * gateway announces mid-run is picked up by the next request.
+ *
  * Accepts an account record (preferred) or a bare api key string. When an
  * account is given, the machine digest and affinity come from the record, so
  * two accounts never present the same machine unless configured to.
@@ -94,7 +98,7 @@ function fingerprintHeaders(account, extra = {}, options = {}) {
 
   const h = {
     "Content-Type": "application/json",
-    "X-DeepAI-Code-Theos": String(LANE_VERSION),
+    "X-DeepAI-Code-Theos": String(currentLane()),
     "X-DeepAI-Code-Instance": INSTANCE_ID,
   };
 

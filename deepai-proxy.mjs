@@ -30,6 +30,7 @@
  *   node deepai-proxy.mjs accounts            # list accounts + machine digests
  *   node deepai-proxy.mjs use <name>          # pin the active account
  *   node deepai-proxy.mjs verify [name]       # live fingerprint check
+ *   node deepai-proxy.mjs lane                # show (and re-discover) the served lane
  *   node deepai-proxy.mjs whoami [name]
  *   node deepai-proxy.mjs serve               # start proxy on 127.0.0.1:8787
  */
@@ -43,6 +44,7 @@ import {
   storePath,
 } from "./src/account.mjs";
 import { MACHINE_HEADER, MACHINE_SOURCE } from "./src/fingerprint.mjs";
+import { laneInfo, refreshLane, refreshAppVersion } from "./src/lane.mjs";
 import { login, importApp } from "./src/login.mjs";
 import { startServer } from "./src/http-server.mjs";
 import { verify } from "./src/verify.mjs";
@@ -85,6 +87,12 @@ else if (cmd === "use") {
 
 else if (cmd === "verify") await verify(arg);
 
+else if (cmd === "lane") {
+  await refreshLane({ force: true });
+  await refreshAppVersion();
+  console.log(JSON.stringify(laneInfo(), null, 2));
+}
+
 else if (cmd === "whoami") {
   const a = requireAccount(arg);
   console.log(JSON.stringify({
@@ -103,6 +111,6 @@ else if (cmd === "serve") startServer();
 
 else {
   console.error("unknown command: " + cmd);
-  console.error("commands: login [name] | import-app [name] | accounts | use <name> | verify [name] | serve | whoami [name]");
+  console.error("commands: login [name] | import-app [name] | accounts | use <name> | verify [name] | lane | serve | whoami [name]");
   process.exit(1);
 }

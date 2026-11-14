@@ -138,7 +138,7 @@ Notes carried into the proxy:
 ```
 POST https://api.deepai.org/deepai_code/chat/completions
 Content-Type: application/json
-X-DeepAI-Code-Theos: 4
+X-DeepAI-Code-Theos: <lane, discovered - §3.8>
 X-DeepAI-Code-Instance: <32 hex, per process>
 X-DeepAI-Code-Machine: <sha256(machine id)>
 api-key: <account api key>
@@ -289,6 +289,41 @@ It is OpenAI-compatible, but the reasoning field is `reasoning` (not `reasoning_
 `model` field is the internal route (`reflection/beam`, `deepseek/deepseek-v4.1-flash-1017`), not the
 catalog id. SSE frames are `data: {...}`, terminated by `[DONE]`.
 
+### 3.8 The lane moves — discovery instead of a constant
+
+`X-DeepAI-Code-Theos` is the lane: a number that is not a protocol version but a **release
+generation**. DeepAI retires a lane when it retires the builds that spoke it, and the refusal is
+explicit:
+
+```
+HTTP/1.1 426 Upgrade Required
+{"error": {"message": "This version of DeepAI Code is no longer supported. Please update the app.",
+           "type": "lane_version_unsupported", "code": "lane_version_unsupported"}}
+```
+
+A hardcoded lane therefore has a shelf life. 4 was right until the app shipped 5, then 6
+(DeepAI-Code 0.3.37, `DEEPAI_LANE_HEADERS = { "X-DeepAI-Code-Theos": "6" }`). `src/lane.mjs`
+discovers the served lane instead:
+
+* **The gate runs before the credential check.** `GET /deepai_code/theos` with only the lane header
+  answers `426 lane_version_unsupported` for a retired lane and `401`/`200` for a served one, so
+  discovery needs no working key — a stale or empty store still finds the lane.
+* **The served set is contiguous** (4 → 426, 5 → 200, 6 → 200, 7 → 426), so the walk is short: a
+  served lane climbs until the first refusal, a refused lane walks up (too old) then down (too new),
+  and the first served lane found going down is the top of the range.
+* **A `200` is authoritative.** `/theos` returns `lane_version` in its body; when present it is
+  adopted verbatim, which is exact rather than inferred.
+* **The value is live, not boot-time.** `fingerprintHeaders()` reads `currentLane()` on every call,
+  the lane is re-probed in the background after `LANE_REFRESH_MS` (15 min), and a `426` on a real
+  request drops the cache, re-discovers and **replays the same request** — so a bump mid-run costs one
+  retry, not a restart.
+* **The seed is only a seed.** `LANE_VERSION` (env `DEEPAI_LANE_VERSION`) is the starting guess for
+  the walk. `DEEPAI_LANE_AUTODISCOVER=0` pins it and never probes.
+
+The check-in beacon is derived the same way: `v=` comes from the desktop download redirect
+(`/download/deepai-code/linux-x64` → `DeepAI-Code-<ver>-x86_64.AppImage`), so it tracks the release
+without another constant.
+
 ---
 
 ## 4. Design
@@ -304,6 +339,7 @@ src/
 ├── account.mjs              store, named accounts, per-account digest + affinity, weights, cursor
 ├── login.mjs                desktop auth flow, exchange, import-app, UI callback, auto-capture
 ├── fingerprint.mjs          machine probes, per-account digest + affinity, header set
+├── lane.mjs                 lane discovery + background refresh + check-in beacon (no restart)
 ├── models.mjs               catalog ids (app's models.json, else fallback list)
 ├── upstream.mjs             payload normalisation, rotation/failover, the upstream fetch
 ├── anthropic-to-openai.mjs  request translation
@@ -344,7 +380,8 @@ One file, zero dependencies, ESM, Node 18+ (`fetch`, `AbortSignal.timeout`, `cry
 | `import-app [name]` | copies `~/.deepai-code/userdata/secrets/deepai-account.bin` in as an account |
 | `accounts` | lists accounts with weight and machine digest, `*` marks the active one |
 | `use <name>` | sets the active account |
-| `verify [name]` | prints the header set, calls `/theos`, then chats **with and without** the digest |
+| `verify [name]` | prints the header set and the discovered lane, calls `/theos`, then chats **with and without** the digest |
+| `lane` | re-discovers the served lane (and app version) and prints it as JSON |
 | `whoami [name]` | masked key, weight, machine digest, store path |
 
 `acc.json` stays the store and carries a top-level `apiKey` mirror of the active account, so anything
@@ -365,6 +402,10 @@ builds wrote it there) and is written back in the same place.
 | `DEEPAI_MACHINE_HEADER` | off (`1` forces on) | send `X-DeepAI-Code-Machine`; the panel can also toggle it |
 | `DEEPAI_MACHINE_ID` | auto probe | raw id hashed into the local digest |
 | `DEEPAI_SESSION_AFFINITY` | random UUID | last-resort affinity when no account is involved |
+| `DEEPAI_LANE_VERSION` | `6` | seed for lane discovery; the served lane is discovered, not assumed |
+| `DEEPAI_LANE_AUTODISCOVER` | on (`0` pins the seed) | stop probing the gateway for the lane |
+| `DEEPAI_LANE_REFRESH_MS` | `900000` | how long a discovered lane is trusted before a background re-probe |
+| `DEEPAI_APP_VERSION` | `0.3.37` | fallback `v=` for the check-in beacon until the live release is fetched |
 | `DEBUG` | off | log the exact upstream JSON body |
 | `DEBUG_HEADERS` | off | log the exact outgoing header set (`api-key` masked) |
 | `LOG_REQUESTS` | off | log inbound requests with credentials redacted |

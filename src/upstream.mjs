@@ -1,5 +1,6 @@
 import { MODEL_BASE, DEBUG_HEADERS, SEND_MACHINE_HEADER } from "./config.mjs";
 import { fingerprintHeaders } from "./fingerprint.mjs";
+import { ensureLaneSoon, isLaneRejection, noteLaneRejected, refreshLane } from "./lane.mjs";
 import {
   nextAccountSequence,
   accountCount,
@@ -35,6 +36,10 @@ function upstreamPayload(payload) {
 /** Given an upstream error response, try to extract a friendly message. */
 function upstreamErrorMessage(status, body, accountName) {
   const who = accountName ? " (account " + accountName + ")" : "";
+  if (status === 426 && body.includes("lane_version_unsupported")) {
+    return "Gateway retired this lane" + who + " - the proxy re-discovers the lane automatically; " +
+      "retry, or run \"node deepai-proxy.mjs lane\" to see the served version.";
+  }
   if (status === 400 && body.includes("DeepAI Code sends")) {
     return "Gateway rejected the request shape" + who + ". Check stream:true + " +
       "stream_options.include_usage, and that the account machineId is not a rejected value.";
@@ -85,6 +90,29 @@ function postOnce(account, body, affinity, signal) {
 }
 
 /**
+ * Send a request, surviving a lane bump without a restart.
+ *
+ * When the gateway retires the lane mid-run it answers 426
+ * lane_version_unsupported. The cached lane is dropped, the served lane is
+ * discovered again, and the same request is replayed once (twice at most) with
+ * the new header. Anything else is returned untouched.
+ */
+async function postWithLaneRetry(account, body, affinity, signal) {
+  let res = await postOnce(account, body, affinity, signal);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (!(await isLaneRejection(res))) return res;
+    noteLaneRejected();
+    try {
+      await res.body?.cancel();
+    } catch {}
+    const info = await refreshLane({ force: true, signal });
+    if (!info.autoDiscover) return res;
+    res = await postOnce(account, body, affinity, signal);
+  }
+  return res;
+}
+
+/**
  * Send one upstream request.
  *
  * With an explicit account the request is pinned to it. Otherwise the next
@@ -94,11 +122,15 @@ function postOnce(account, body, affinity, signal) {
 async function upstreamFetch(payload, { affinity, signal, account } = {}) {
   if (accountCount() === 0) throw Object.assign(new Error("not signed in"), { status: 401 });
 
+  // Refresh the discovered lane in the background when it is getting old; the
+  // 426 retry below covers the case where it is already stale.
+  ensureLaneSoon();
+
   const body = debugBody(upstreamPayload(payload));
 
   if (account) {
     recordAccount(account);
-    const pinned = await postOnce(account, body, affinity, signal);
+    const pinned = await postWithLaneRetry(account, body, affinity, signal);
     pinned.account = account;
     if (pinned.ok) markAccountHealthy(account);
     return pinned;
@@ -113,7 +145,7 @@ async function upstreamFetch(payload, { affinity, signal, account } = {}) {
     const acc = candidates[attempt];
     recordAccount(acc);
     try {
-      res = await postOnce(acc, body, affinity, signal);
+      res = await postWithLaneRetry(acc, body, affinity, signal);
     } catch (err) {
       if (err && (err.name === "AbortError" || (signal && signal.aborted))) throw err;
       res = null;
