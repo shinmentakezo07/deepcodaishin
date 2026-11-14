@@ -1,5 +1,5 @@
 # deepai-proxy
-
+q
 A local HTTP proxy that exposes a **DeepAI Code desktop account** as an OpenAI-compatible and
 Anthropic-compatible endpoint, using the same sign-in flow and the same wire fingerprint as the app.
 
