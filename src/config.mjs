@@ -13,7 +13,12 @@ export const PORT = Number(process.env.PORT || 8787);
 export const PROXY_TOKEN = process.env.PROXY_TOKEN || "";
 export const API_ORIGIN = (process.env.DEEPAI_API_ORIGIN || "https://api.deepai.org").replace(/\/+$/, "");
 export const MODEL_BASE = API_ORIGIN + "/deepai_code";
-export const LANE_VERSION = 4;
+export const LANE_VERSION = 6;
+// DeepAI Code desktop release this fingerprint mirrors (0.3.37 ships lane 6;
+// the gateway answers 426 lane_version_unsupported to older lanes).
+export const APP_VERSION = "0.3.37";
+// Telemetry beacon the app attaches to /theos check-ins: v=<app>;up=<uptime>;pi;focus.
+export const DEEPAI_BEACON = `v=${APP_VERSION};up=0;pi=0;focus=0`;
 // Off by default: the local digest is the value the gateway rejected on this
 // machine. Each account still carries its own digest (see account.mjs), so
 // DEEPAI_MACHINE_HEADER=1 sends the account digest instead of the local one.

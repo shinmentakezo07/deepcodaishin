@@ -9,7 +9,7 @@
  * rejected digest can be told apart from a rejected payload.
  */
 
-import { MODEL_BASE, ACCOUNT_NAME } from "./config.mjs";
+import { MODEL_BASE, ACCOUNT_NAME, DEEPAI_BEACON } from "./config.mjs";
 import { findAccount, listAccounts, accountMachineId, accountAffinity } from "./account.mjs";
 import { fingerprintHeaders, MACHINE_HEADER, MACHINE_SOURCE } from "./fingerprint.mjs";
 
@@ -62,7 +62,7 @@ async function verifyAccount(acc) {
   };
 
   try {
-    const theos = await fetch(MODEL_BASE + "/theos", { method: "GET", headers, redirect: "error" });
+    const theos = await fetch(MODEL_BASE + "/theos", { method: "GET", headers: { ...headers, "X-DeepAI-Code-Beacon": DEEPAI_BEACON }, redirect: "error" });
     const body = await theos.text().catch(() => "");
     report.checks.theos = { ok: theos.ok, status: theos.status, detail: body.slice(0, 120).replace(/\s+/g, " ") };
   } catch (err) {
