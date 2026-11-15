@@ -95,20 +95,27 @@ export function UsageHero({ usage, online }) {
 }
 
 function PerAccount({ rows }) {
-  const total = (rows || []).reduce((sum, r) => sum + (r.requests || 0), 0);
-  if (!rows || rows.length === 0) {
+  const list = rows || [];
+  const total = list.reduce((sum, r) => sum + (r.requests || 0), 0);
+  const totalTokens = list.reduce((sum, r) => sum + (r.totalTokens || 0), 0);
+  if (list.length === 0) {
     return (
       <p className="text-[11.5px] text-slate-500">No requests yet this run.</p>
     );
   }
-  const max = Math.max(1, ...rows.map((r) => r.requests));
+  const max = Math.max(1, ...list.map((r) => r.requests));
   return (
-    <ul className="space-y-1.5" aria-label="Requests per account">
-      {rows.map((r) => {
+    <ul className="space-y-1.5" aria-label="Requests and tokens per account">
+      {list.map((r) => {
         const share = total > 0 ? Math.round((r.requests / total) * 100) : 0;
+        const tokenShare = totalTokens > 0 ? Math.round(((r.totalTokens || 0) / totalTokens) * 100) : 0;
+        const tokens = r.totalTokens || 0;
         return (
           <li key={r.id || r.name} className="flex items-center gap-2">
-            <span className="w-[7.5rem] shrink-0 truncate font-mono text-[11px] text-slate-300" title={r.name}>
+            <span
+              className="w-[7.5rem] shrink-0 truncate font-mono text-[11px] text-slate-300"
+              title={r.name + (r.lastAt ? " · last used " + fmtTime(r.lastAt) : "")}
+            >
               {r.name || r.id}
             </span>
             <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
@@ -119,6 +126,17 @@ function PerAccount({ rows }) {
             </span>
             <span className="tnum mono w-10 shrink-0 text-right text-[11px] text-slate-200">{r.requests}</span>
             <span className="tnum w-8 shrink-0 text-right text-[10px] text-slate-500">{share}%</span>
+            <span
+              className="tnum mono w-[4.5rem] shrink-0 text-right text-[10.5px] text-emerald-300/80"
+              title={
+                tokens
+                  ? fmtNum(r.promptTokens) + " prompt + " + fmtNum(r.completionTokens) + " completion · " +
+                    tokenShare + "% of tokens"
+                  : "no tokens recorded"
+              }
+            >
+              {fmtNum(tokens)} tok
+            </span>
             {r.rejected ? (
               <span className="shrink-0 font-mono text-[9.5px] text-rose-400/80" title={r.rejected + " rejected"}>
                 {r.rejected}r
@@ -140,9 +158,9 @@ export function UsageDetail({ usage }) {
       <RequestMix usage={u} />
       <div className="mt-4">
         <div className="mb-1.5 flex items-baseline justify-between">
-          <span className="label">requests per account</span>
+          <span className="label">requests / tokens per account</span>
           <span className="tnum mono text-[10.5px] text-slate-500">
-            {(u.perAccount || []).reduce((s, r) => s + (r.requests || 0), 0)} attempts / {u.requests || 0} requests
+            {(u.perAccount || []).reduce((s, r) => s + (r.requests || 0), 0)} attempts · {fmtNum(u.totalTokens)} tok
           </span>
         </div>
         <PerAccount rows={u.perAccount} />

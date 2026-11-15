@@ -126,9 +126,9 @@ path.
 | `DEEPAI_MACHINE_ID` | auto | raw id to hash into the machine header |
 | `DEEPAI_SESSION_AFFINITY` | per account | force one affinity value |
 | `DEEPAI_LANE_VERSION` | `6` | seed for lane discovery — the lane is discovered from the gateway, not assumed |
-| `DEEPAI_LANE_AUTODISCOVER` | on (`0` pins the seed) | stop probing the gateway; `426 lane_version_unsupported` is then surfaced as-is |
+| `DEEPAI_LANE_AUTODISCOVER` | on (`0` pins the seed) | stop probing the gateway; a `426` (upgrade required) is then surfaced as-is |
 | `DEEPAI_LANE_REFRESH_MS` | `900000` | how long a discovered lane is trusted before a background re-probe (a `426` always forces one) |
-| `DEEPAI_APP_VERSION` | `0.3.37` | fallback `v=` for the check-in beacon; the live release is read from the download redirect |
+| `DEEPAI_APP_VERSION` | `0.3.37` | fallback `v=` for the check-in beacon; the live release is read from the download redirect, re-checked every 6 h (retried after 1 min on failure) |
 | `STORE_CACHE_TTL_MS` | `250` | how long the parsed account store is reused before the files are re-stat'ed; `0` re-reads on every call |
 | `KEEPALIVE_TIMEOUT_MS` | `65000` | how long an idle client connection is kept open for reuse (Node's default of 5s is shorter than the pause between chat turns) |
 | `LOG_REQUESTS` | off | log inbound requests, credentials redacted |

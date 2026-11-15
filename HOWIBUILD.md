@@ -308,9 +308,14 @@ discovers the served lane instead:
 * **The gate runs before the credential check.** `GET /deepai_code/theos` with only the lane header
   answers `426 lane_version_unsupported` for a retired lane and `401`/`200` for a served one, so
   discovery needs no working key — a stale or empty store still finds the lane.
-* **The served set is contiguous** (4 → 426, 5 → 200, 6 → 200, 7 → 426), so the walk is short: a
-  served lane climbs until the first refusal, a refused lane walks up (too old) then down (too new),
-  and the first served lane found going down is the top of the range.
+* **The served set is contiguous** (4 → 426, 5 → 200, 6 → 200, 7 → 426), and discovery finds
+  its top in two passes: probe anchors every 8 lanes across `1..LANE_MAX` in parallel, then
+  binary-search between the highest served anchor and the lowest refused one above it. A jump of
+  any size therefore costs ~12 probes, not a long sequential walk.
+* **Only a `426` means "not served".** `2xx`/`401`/`403` mean served (the gate runs before the
+  credential check); a timeout, `429` or `5xx` is "unknown" and is never adopted — a lane no probe
+  confirmed would only hand the next request another `426`. Any `426` counts, even if the body
+  marker is renamed.
 * **A `200` is authoritative.** `/theos` returns `lane_version` in its body; when present it is
   adopted verbatim, which is exact rather than inferred.
 * **The value is live, not boot-time.** `fingerprintHeaders()` reads `currentLane()` on every call,
@@ -318,11 +323,14 @@ discovers the served lane instead:
   request drops the cache, re-discovers and **replays the same request** — so a bump mid-run costs one
   retry, not a restart.
 * **The seed is only a seed.** `LANE_VERSION` (env `DEEPAI_LANE_VERSION`) is the starting guess for
-  the walk. `DEEPAI_LANE_AUTODISCOVER=0` pins it and never probes.
+  discovery. `DEEPAI_LANE_AUTODISCOVER=0` pins it and never probes.
 
 The check-in beacon is derived the same way: `v=` comes from the desktop download redirect
 (`/download/deepai-code/linux-x64` → `DeepAI-Code-<ver>-x86_64.AppImage`), so it tracks the release
-without another constant.
+without another constant. `startVersionWatch()` re-checks both every minute (each is a no-op inside
+its TTL), so a container that runs for weeks still follows a release. A failed app-version fetch
+retries after a minute instead of pinning the fallback for six hours, and the failure is logged and
+surfaced as `appVersionError` in `laneInfo()`.
 
 ---
 

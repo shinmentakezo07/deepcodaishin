@@ -1,6 +1,6 @@
 import { MODEL_BASE, DEBUG_HEADERS, SEND_MACHINE_HEADER } from "./config.mjs";
 import { fingerprintHeaders } from "./fingerprint.mjs";
-import { ensureLaneSoon, isLaneRejection, noteLaneRejected, refreshLane } from "./lane.mjs";
+import { ensureLaneSoon, isLaneRejection, noteLaneRejected, refreshLane, refreshAppVersion } from "./lane.mjs";
 import {
   nextAccountSequence,
   accountCount,
@@ -90,23 +90,28 @@ function postOnce(account, body, affinity, signal) {
 }
 
 /**
- * Send a request, surviving a lane bump without a restart.
+ * Send a request, surviving a version bump without a restart.
  *
- * When the gateway retires the lane mid-run it answers 426
- * lane_version_unsupported. The cached lane is dropped, the served lane is
- * discovered again, and the same request is replayed once (twice at most) with
- * the new header. Anything else is returned untouched.
+ * When the gateway retires the build it answers 426 (or, occasionally, a 400
+ * that names the app version). The cached lane and beacon version are dropped,
+ * the served lane is discovered again, and the same request is replayed once
+ * (twice at most) with the new headers. Anything else is returned untouched.
  */
 async function postWithLaneRetry(account, body, affinity, signal) {
   let res = await postOnce(account, body, affinity, signal);
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (!(await isLaneRejection(res))) return res;
     noteLaneRejected();
+    // A retired build can mean a new lane, a new beacon version, or both:
+    // refresh them together before replaying.
+    const info = await refreshLane({ force: true, signal });
+    await refreshAppVersion({ force: true }).catch(() => {});
+    // Discovery failed: hand the 426 back with its body intact so the caller
+    // can show the gateway's message.
+    if (!info.autoDiscover || info.lastError) return res;
     try {
       await res.body?.cancel();
     } catch {}
-    const info = await refreshLane({ force: true, signal });
-    if (!info.autoDiscover) return res;
     res = await postOnce(account, body, affinity, signal);
   }
   return res;
@@ -151,8 +156,8 @@ async function upstreamFetch(payload, { affinity, signal, account } = {}) {
       res = null;
       continue;
     }
+    res.account = acc;
     if (!isRetryable(res.status)) {
-      res.account = acc;
       markAccountHealthy(acc);
       return res;
     }

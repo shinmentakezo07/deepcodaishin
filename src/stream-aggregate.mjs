@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { streamFailureMessage } from "./stream-guard.mjs";
 
 // ---------------------------------------------------------------- streaming
 
@@ -23,8 +24,26 @@ async function aggregateStream(body, model) {
   };
   const msg = out.choices[0].message;
   const tools = new Map();
+  // The streaming path rewrites an in-band error frame or an EOF without a
+  // finish_reason into a retryable failure (stream-guard.mjs). The aggregate
+  // path must do the same, or a truncated turn becomes a 200 with an empty
+  // message and finish_reason "stop" - silent data loss for the caller.
+  let failure = null;
+  // [DONE] is a terminal frame too: the streaming guard accepts it without a
+  // finish_reason, so the aggregate path must not call the same stream truncated.
+  let sawDone = false;
 
   const handle = (json) => {
+    if (json?.error) {
+      if (!failure) {
+        const e = json.error;
+        failure = {
+          message:
+            typeof e === "object" && e !== null && typeof e.message === "string" ? e.message : String(e),
+        };
+      }
+      return;
+    }
     if (json?.id) out.id = json.id;
     if (json?.model) out.model = json.model;
     if (json?.usage) {
@@ -76,11 +95,17 @@ async function aggregateStream(body, model) {
       const line = raw.split("\n").find((l) => l.startsWith("data:"));
       if (!line) continue;
       const data = line.slice(5).trim();
-      if (!data || data === "[DONE]") continue;
+      if (!data) continue;
+      if (data === "[DONE]") {
+        sawDone = true;
+        continue;
+      }
       try {
         handle(JSON.parse(data));
       } catch {}
+      if (failure) break;
     }
+    if (failure) break;
   }
 
   // The last frame often arrives without its terminating blank line, and it is
@@ -90,7 +115,11 @@ async function aggregateStream(body, model) {
   for (const line of buf.split("\n")) {
     if (!line.startsWith("data:")) continue;
     const data = line.slice(5).trim();
-    if (!data || data === "[DONE]") continue;
+    if (!data) continue;
+    if (data === "[DONE]") {
+      sawDone = true;
+      continue;
+    }
     try {
       handle(JSON.parse(data));
     } catch {}
@@ -98,7 +127,20 @@ async function aggregateStream(body, model) {
 
   if (tools.size) msg.tool_calls = [...tools.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
   if (!msg.content) msg.content = null;
-  if (!out.choices[0].finish_reason) out.choices[0].finish_reason = tools.size ? "tool_calls" : "stop";
+  if (failure) {
+    throw Object.assign(new Error(streamFailureMessage(failure.message)), { status: 502 });
+  }
+  if (!out.choices[0].finish_reason) {
+    // A stream that ended without a finish_reason or [DONE] frame was cut off
+    // upstream, exactly as the streaming path treats it - not a completed turn.
+    if (!sawDone) {
+      throw Object.assign(
+        new Error(streamFailureMessage("upstream closed the stream without a finish frame")),
+        { status: 502 },
+      );
+    }
+    out.choices[0].finish_reason = tools.size ? "tool_calls" : "stop";
+  }
   return out;
 }
 

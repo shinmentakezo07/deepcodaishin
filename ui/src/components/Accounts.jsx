@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { cx } from "../api.js";
+import { cx, fmtNum, fmtTime } from "../api.js";
 import { Button, Card, inputClass } from "./ui.jsx";
 
 function Avatar({ name }) {
@@ -42,17 +42,37 @@ function Stepper({ value, onChange, disabled, label }) {
   );
 }
 
-function RequestChip({ count, rejected, share }) {
-  if (!count) {
+function RequestChip({ count, rejected, share, tokens, promptTokens, completionTokens, lastAt }) {
+  const total = Number(tokens) || 0;
+  if (!count && !total) {
     return <span className="font-mono text-[10.5px] text-slate-600">0 req</span>;
   }
+  const title = [
+    count + " requests",
+    rejected ? rejected + " rejected" : null,
+    share ? share + " of traffic" : null,
+    total ? fmtNum(promptTokens) + " prompt + " + fmtNum(completionTokens) + " completion tokens" : null,
+    lastAt ? "last used " + fmtTime(lastAt) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <span
       className="inline-flex items-center gap-1 font-mono text-[10.5px] text-slate-400"
-      title={count + " requests" + (rejected ? ", " + rejected + " rejected" : "") + (share ? ", " + share + " of traffic" : "")}
+      title={title}
     >
       <span aria-hidden="true" className="h-1 w-1 rounded-full bg-blue-400/70" />
-      <span className="tnum text-slate-300">{count}</span> req
+      {count ? (
+        <>
+          <span className="tnum text-slate-300">{fmtNum(count)}</span> req
+        </>
+      ) : null}
+      {total ? (
+        <>
+          {count ? <span aria-hidden="true" className="text-slate-600">·</span> : null}
+          <span className="tnum text-emerald-300/80">{fmtNum(total)}</span> tok
+        </>
+      ) : null}
       {rejected ? <span className="text-rose-400/80">/{rejected} rej</span> : null}
     </span>
   );
@@ -132,6 +152,9 @@ export default function AccountsCard({
         {accounts.map((a) => {
           const isNext = single ? settings.active === a.name : a.name === nextName;
           const isActive = settings.active === a.name;
+          const u = usageFor(a) || {};
+          const share =
+            totalRequests > 0 && u.requests ? Math.round((u.requests / totalRequests) * 100) + "%" : "";
           return (
             <div
               key={a.index}
@@ -176,13 +199,13 @@ export default function AccountsCard({
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 font-mono text-[10.5px] text-slate-500">
                   {a.machineId ? <span>machine {a.machineId}...</span> : null}
                   <RequestChip
-                    count={(usageFor(a) || {}).requests || 0}
-                    rejected={(usageFor(a) || {}).rejected || 0}
-                    share={
-                      totalRequests > 0 && (usageFor(a) || {}).requests
-                        ? Math.round(((usageFor(a) || {}).requests / totalRequests) * 100) + "%"
-                        : ""
-                    }
+                    count={u.requests || 0}
+                    rejected={u.rejected || 0}
+                    share={share}
+                    tokens={u.totalTokens || 0}
+                    promptTokens={u.promptTokens || 0}
+                    completionTokens={u.completionTokens || 0}
+                    lastAt={u.lastAt}
                   />
                 </div>
               </div>

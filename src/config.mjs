@@ -22,6 +22,8 @@ export const LANE_VERSION = Number(process.env.DEEPAI_LANE_VERSION || 6);
 export const LANE_AUTODISCOVER = process.env.DEEPAI_LANE_AUTODISCOVER !== "0";
 // How long a discovered lane is trusted before it is re-probed in the background.
 export const LANE_REFRESH_MS = Number(process.env.DEEPAI_LANE_REFRESH_MS || 15 * 60 * 1000);
+// Same for the model pool fetched from the gateway's /models endpoint.
+export const MODELS_REFRESH_MS = Number(process.env.DEEPAI_MODELS_REFRESH_MS || 15 * 60 * 1000);
 // Upper bound for the discovery walk; the gateway has never served anything near it.
 export const LANE_MAX = 64;
 // Fallback app version for the check-in beacon until the live one is fetched.

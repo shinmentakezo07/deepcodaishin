@@ -31,8 +31,10 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
     if (res.writableEnded || res.destroyed) return;
     if (!res.write(sseChunk({ event, data }))) needDrain = true;
   };
-  const drained = () =>
-    new Promise((resolve) => {
+  const drained = () => {
+    // The socket may have closed before "close" could be observed again.
+    if (res.destroyed || res.writableEnded) return Promise.resolve();
+    return new Promise((resolve) => {
       const done = () => {
         res.off("drain", done);
         res.off("close", done);
@@ -41,6 +43,7 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
       res.on("drain", done);
       res.on("close", done);
     });
+  };
 
   const ensureStart = (u) => {
     if (started) return;
@@ -190,6 +193,9 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
       try {
         let stopped = false;
         let sawFinish = false;
+        // [DONE] alone also ends a turn; the OpenAI relay guard accepts it, so
+        // this path must not report the same stream as truncated.
+        let sawDone = false;
         for await (const chunk of upstreamBody) {
           // Stop pulling from upstream the moment the caller is gone.
           if (res.writableEnded || res.destroyed) {
@@ -206,7 +212,11 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
             const line = raw.split("\n").find((l) => l.startsWith("data:"));
             if (!line) continue;
             const data = line.slice(5).trim();
-            if (!data || data === "[DONE]") continue;
+            if (!data) continue;
+            if (data === "[DONE]") {
+              sawDone = true;
+              continue;
+            }
             // Parse failures are the upstream's business; handleChunk's own
             // errors (a terminal error frame) must reach the catch below.
             let json;
@@ -229,7 +239,11 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
           for (const line of buf.split("\n")) {
             if (!line.startsWith("data:")) continue;
             const data = line.slice(5).trim();
-            if (!data || data === "[DONE]") continue;
+            if (!data) continue;
+            if (data === "[DONE]") {
+              sawDone = true;
+              continue;
+            }
             let json;
             try {
               json = JSON.parse(data);
@@ -240,7 +254,7 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
             if (finish) sawFinish = true;
           }
         }
-        if (!stopped && !sawFinish) {
+        if (!stopped && !sawFinish && !sawDone) {
           throw new Error(streamFailureMessage("upstream closed the stream without a finish frame"));
         }
         terminate(STOP_MAP[finish] || "end_turn");

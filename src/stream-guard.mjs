@@ -43,6 +43,16 @@ function frameData(raw) {
   return line ? line.slice(5).trim() : null;
 }
 
+/** True when `text` is one complete JSON value (a frame cut mid-write is not). */
+function isJson(text) {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Forward `body` to `write`, replacing a terminal upstream failure with a
  * retryable one.
@@ -87,39 +97,69 @@ export async function relayGuarded(body, { write, onUsage } = {}) {
     return true;
   };
 
-  for await (const chunk of body) {
-    const text = dec.decode(chunk, { stream: true });
-    if (
-      !text.includes(ERROR_MARK) &&
-      !FINISH_MARK.test(text) &&
-      !text.includes(USAGE_MARK) &&
-      !text.includes(DONE_MARK)
-    ) {
-      if (!(await write(chunk))) return { failed: false, stopped: true };
-      continue;
-    }
-    buf += text;
-    let split;
-    while ((split = buf.indexOf("\n\n")) !== -1) {
-      const raw = buf.slice(0, split);
-      buf = buf.slice(split + 2);
-      if (inspect(frameData(raw)) && !(await write(Buffer.from(raw + "\n\n")))) {
-        return { failed: false, stopped: true };
+  try {
+    for await (const chunk of body) {
+      const text = dec.decode(chunk, { stream: true });
+      // Fast path only when the chunk ends on a frame boundary: a chunk that ends
+      // mid-frame can have its error/finish/usage mark in the *next* chunk, and
+      // forwarding it blind would split the frame past the guard.
+      if (
+        !buf &&
+        text.endsWith("\n\n") &&
+        !text.includes(ERROR_MARK) &&
+        !FINISH_MARK.test(text) &&
+        !text.includes(USAGE_MARK) &&
+        !text.includes(DONE_MARK)
+      ) {
+        if (!(await write(chunk))) return { failed: false, stopped: true };
+        continue;
+      }
+      buf += text;
+      if (buf.includes("\r")) buf = buf.replace(/\r\n/g, "\n");
+      let split;
+      while ((split = buf.indexOf("\n\n")) !== -1) {
+        const raw = buf.slice(0, split);
+        buf = buf.slice(split + 2);
+        if (inspect(frameData(raw)) && !(await write(Buffer.from(raw + "\n\n")))) {
+          return { failed: false, stopped: true };
+        }
+        if (failure) break;
       }
       if (failure) break;
     }
-    if (failure) break;
+  } catch (err) {
+    // A reset connection throws instead of ending the iterator. Treat it like
+    // the EOF case below so the caller still gets a retryable error frame.
+    if (err?.name === "AbortError") return { failed: false, stopped: true };
+    if (!failure) failure = { message: String(err?.message || err) };
   }
 
   if (!failure) {
-    // A final frame often arrives without its terminating blank line.
+    // A final frame often arrives without its terminating blank line, and it is
+    // usually the one carrying finish_reason and usage. Forward it like any
+    // other frame instead of only inspecting it, or the client never sees the
+    // end of the turn.
     buf += dec.decode();
+    if (buf.includes("\r")) buf = buf.replace(/\r\n/g, "\n");
     if (buf.trim()) {
       for (const raw of buf.split("\n\n")) {
-        if (raw.trim() && !inspect(frameData(raw))) break;
+        if (!raw.trim()) continue;
+        const data = frameData(raw);
+        if (data === null) continue; // a comment/keep-alive tail, not an event
+        if (data !== DONE_MARK && !isJson(data)) {
+          // Half a frame: the upstream died mid-write.
+          if (!failure) failure = { message: "upstream closed the stream mid-frame" };
+          break;
+        }
+        if (!inspect(data)) break;
+        if (!(await write(Buffer.from(raw + "\n\n")))) {
+          return { failed: false, stopped: true };
+        }
       }
     }
-    if (!terminal) failure = { message: "upstream closed the stream without a finish frame" };
+    // inspect() may already have found the real failure in the tail; do not
+    // replace its message with the generic EOF one.
+    if (!terminal && !failure) failure = { message: "upstream closed the stream without a finish frame" };
   }
 
   if (failure) {

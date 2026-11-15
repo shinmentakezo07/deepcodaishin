@@ -89,7 +89,7 @@ else if (cmd === "verify") await verify(arg);
 
 else if (cmd === "lane") {
   await refreshLane({ force: true });
-  await refreshAppVersion();
+  await refreshAppVersion({ force: true });
   console.log(JSON.stringify(laneInfo(), null, 2));
 }
 

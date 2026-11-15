@@ -120,6 +120,7 @@ async function verify(name) {
   console.log(
     "lane     : " + report.lane.version + "  (source: " + report.lane.source +
       ", app " + report.lane.appVersion +
+      (report.lane.appVersionSource === "download" ? " live" : " fallback") +
       (report.lane.autoDiscover ? ", auto-discovered" : ", pinned by env") + ")",
   );
   console.log("outgoing headers:");

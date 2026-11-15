@@ -17,7 +17,7 @@ import {
 import { handleApi } from "./api.mjs";
 import { handleLoginCallback } from "./login.mjs";
 import { MACHINE_HEADER, MACHINE_SOURCE } from "./fingerprint.mjs";
-import { laneInfo, warm } from "./lane.mjs";
+import { laneInfo, warm, startVersionWatch } from "./lane.mjs";
 import {
   listAccounts,
   listAccountSummaries,
@@ -29,7 +29,7 @@ import {
   loadSettings,
   captureAppAccounts,
 } from "./account.mjs";
-import { catalogIds } from "./models.mjs";
+import { catalogIds, refreshModels, modelsInfo } from "./models.mjs";
 import { upstreamFetch, upstreamErrorMessage } from "./upstream.mjs";
 import { anthropicToOpenAI } from "./anthropic-to-openai.mjs";
 import { openAIToAnthropic } from "./openai-to-anthropic.mjs";
@@ -64,6 +64,7 @@ function healthPayload() {
       machine: accountMachineId(a, MACHINE_HEADER).slice(0, 12) + "...",
     })),
     lane: laneInfo(),
+    modelPool: modelsInfo(),
     machine: MACHINE_HEADER ? "present (" + MACHINE_SOURCE + ")" : "absent",
     sendMachineHeader: SEND_MACHINE_HEADER || loadSettings().sendMachineHeader === true,
     upstream: MODEL_BASE,
@@ -256,6 +257,9 @@ function isAbortError(err, signal) {
 
 /** Resolve when the socket drains, or straight away if the peer went away. */
 function drained(res) {
+  // A socket that closed before this call already fired "close", so waiting for
+  // it again would hang the relay forever.
+  if (res.destroyed || res.writableEnded) return Promise.resolve();
   return new Promise((resolve) => {
     const done = () => {
       res.off("drain", done);
@@ -508,6 +512,12 @@ function startServer() {
   // Learn the served lane (and the current app version for the check-in beacon)
   // before the first request. Non-blocking: a cold start must not wait on it.
   warm().catch(() => {});
+  // Keep both current while the container runs: a long-lived process must pick
+  // up a new lane or release without a restart.
+  startVersionWatch();
+  // Same for the model pool: fetched in the background, served from the
+  // fallback list until the first fetch lands.
+  refreshModels({ force: true }).catch(() => {});
 
   const server = http.createServer(async (req, res) => {
     try {

@@ -47,6 +47,36 @@ docker run -d --name deepai-proxy \
   deepai-proxy:local
 ```
 
+## Railway (and other Docker hosts)
+
+Railway builds this repository from the `Dockerfile`; no `railway.json` or start
+command is needed. The image already sets `HOST=0.0.0.0`, and the server reads
+`PORT` from the environment, so Railway's injected port is used as-is.
+
+```text
+Builder      : Dockerfile
+Healthcheck  : /health        (public, no credential)
+Volume       : mount at /data (see below)
+Replicas     : 1
+```
+
+- **Credentials do not survive a redeploy by default.** Railway's filesystem is
+  ephemeral, so `ACC_PATH`/`ACCOUNTS_PATH` are lost on every deploy unless a
+  volume is attached at `/data`. Attach one, then sign in through the panel's
+  **Manual sign-in** (the login redirect points at `127.0.0.1`, which is the
+  user's browser, not the container).
+- **Outbound HTTPS is required** to `api.deepai.org` (gateway) and `deepai.org`
+  (the download redirect used to learn the current release version). If
+  `deepai.org` is blocked, the beacon keeps the `DEEPAI_APP_VERSION` fallback
+  and logs the failure; requests still work.
+- **No rebuild is needed when DeepAI bumps the app.** The lane and the beacon
+  version are discovered at runtime and re-checked while the process runs
+  (lane every 15 min, release every 6 h), and a `426` from the gateway forces a
+  re-discovery plus a replay of that request. Rebuild only when you change this
+  repository.
+- **Run one replica.** Rotation state and the credential store live in the
+  container; two replicas would rotate independently over separate stores.
+
 ## Configuration
 
 | Variable | Default (container) | Purpose |
