@@ -24,8 +24,34 @@ const ERROR_MARK = '"error"';
 const FINISH_MARK = /"finish_reason"\s*:\s*"/;
 const USAGE_MARK = '"usage"';
 const DONE_MARK = "[DONE]";
+// A comment frame: every SSE client ignores it, and it keeps an idle proxy
+// (Cloudflare, a load balancer) from closing a stream that is only "thinking".
+const SSE_PING = ": ping\n\n";
 
 export const STREAM_FAILURE_PREFIX = "502 upstream stream interrupted";
+
+/**
+ * Run `write` only when the stream has been quiet for `intervalMs`.
+ *
+ * A long reasoning pause produces no frames, and an idle timeout in front of
+ * the container then kills a healthy stream. Call `touch()` on every forwarded
+ * frame so an active stream is never interrupted by a keep-alive.
+ */
+export function keepAliveWhileQuiet(write, intervalMs = 15_000) {
+  let last = Date.now();
+  const timer = setInterval(() => {
+    if (Date.now() - last < intervalMs) return;
+    last = Date.now();
+    void Promise.resolve().then(write).catch(() => {});
+  }, Math.max(500, Math.floor(intervalMs / 2)));
+  if (typeof timer.unref === "function") timer.unref();
+  return {
+    touch: () => {
+      last = Date.now();
+    },
+    stop: () => clearInterval(timer),
+  };
+}
 
 /**
  * One message for a stream that died early, marked as a server error so an
@@ -55,19 +81,37 @@ function isJson(text) {
 
 /**
  * Forward `body` to `write`, replacing a terminal upstream failure with a
- * retryable one.
+ * retryable one, and emit a keep-alive comment while the stream is quiet.
  *
  * @param body   upstream response body (async iterable of Uint8Array).
  * @param write  async (chunk: Uint8Array) => boolean; false stops the relay
  *               (the client hung up).
  * @param onUsage called for every frame that carries a usage block.
+ * @param keepAliveMs quiet time before a comment frame; 0 disables it.
  * @returns {{ failed: boolean, stopped: boolean, error?: object }}
  */
-export async function relayGuarded(body, { write, onUsage } = {}) {
+export async function relayGuarded(body, options = {}) {
+  const { write, keepAliveMs = 15_000 } = options;
+  const beat = keepAliveMs > 0 ? keepAliveWhileQuiet(() => write(Buffer.from(SSE_PING)), keepAliveMs) : null;
+  try {
+    return await relayCore(body, options, beat);
+  } finally {
+    beat?.stop();
+  }
+}
+
+async function relayCore(body, { write, onUsage }, beat) {
   const dec = new TextDecoder();
   let buf = "";
   let terminal = false;
   let failure = null;
+
+  /** Forward one chunk and note that the stream is not idle. */
+  const emit = async (chunk) => {
+    const ok = await write(chunk);
+    beat?.touch();
+    return ok;
+  };
 
   /** @returns true when the frame should be forwarded. */
   const inspect = (data) => {
@@ -111,7 +155,7 @@ export async function relayGuarded(body, { write, onUsage } = {}) {
         !text.includes(USAGE_MARK) &&
         !text.includes(DONE_MARK)
       ) {
-        if (!(await write(chunk))) return { failed: false, stopped: true };
+        if (!(await emit(chunk))) return { failed: false, stopped: true };
         continue;
       }
       buf += text;
@@ -120,7 +164,7 @@ export async function relayGuarded(body, { write, onUsage } = {}) {
       while ((split = buf.indexOf("\n\n")) !== -1) {
         const raw = buf.slice(0, split);
         buf = buf.slice(split + 2);
-        if (inspect(frameData(raw)) && !(await write(Buffer.from(raw + "\n\n")))) {
+        if (inspect(frameData(raw)) && !(await emit(Buffer.from(raw + "\n\n")))) {
           return { failed: false, stopped: true };
         }
         if (failure) break;
@@ -152,7 +196,7 @@ export async function relayGuarded(body, { write, onUsage } = {}) {
           break;
         }
         if (!inspect(data)) break;
-        if (!(await write(Buffer.from(raw + "\n\n")))) {
+        if (!(await emit(Buffer.from(raw + "\n\n")))) {
           return { failed: false, stopped: true };
         }
       }
@@ -168,7 +212,7 @@ export async function relayGuarded(body, { write, onUsage } = {}) {
       type: "upstream_error",
       code: "upstream_stream_error",
     };
-    await write(Buffer.from("data: " + JSON.stringify({ error }) + "\n\n"));
+    await emit(Buffer.from("data: " + JSON.stringify({ error }) + "\n\n"));
     return { failed: true, stopped: false, error };
   }
   return { failed: false, stopped: false };

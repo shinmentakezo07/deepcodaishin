@@ -171,6 +171,7 @@ export function UsageDetail({ usage }) {
         <Meta label="messages" value={fmtNum(u.messageRequests)} />
         <Meta label="token count" value={fmtNum(u.countTokenRequests)} />
         <Meta label="prompt tokens" value={fmtNum(u.promptTokens)} />
+        <Meta label="cached prompt" value={fmtNum(u.cachedTokens)} />
         <Meta label="completion" value={fmtNum(u.completionTokens)} />
         <Meta label="errors" value={fmtNum(u.errors)} tone={Number(u.errors) > 0 ? "bad" : undefined} />
         <Meta label="last account" value={u.lastAccount || "-"} />

@@ -8,6 +8,20 @@ const STOP_MAP = {
   content_filter: "end_turn",
 };
 
+/**
+ * Anthropic stop_reason for a finished turn.
+ *
+ * A response that contains tool_use blocks must report "tool_use" even when the
+ * gateway says "stop": agent clients (Claude Code and friends) only execute the
+ * tools on that stop_reason, so "end_turn" silently drops the calls. "length"
+ * still wins, because the tool call itself may have been cut off.
+ */
+function stopReasonFor(finishReason, hasTools) {
+  if (finishReason === "length") return "max_tokens";
+  if (hasTools) return "tool_use";
+  return STOP_MAP[finishReason] || "end_turn";
+}
+
 function openAIToAnthropic(resp, model) {
   const choice = resp?.choices?.[0] || {};
   const msg = choice.message || {};
@@ -35,7 +49,7 @@ function openAIToAnthropic(resp, model) {
     role: "assistant",
     model: resp?.model || model,
     content,
-    stop_reason: STOP_MAP[choice.finish_reason] || "end_turn",
+    stop_reason: stopReasonFor(choice.finish_reason, content.some((c) => c.type === "tool_use")),
     stop_sequence: null,
     usage: {
       input_tokens: u.prompt_tokens ?? 0,
@@ -45,4 +59,4 @@ function openAIToAnthropic(resp, model) {
   };
 }
 
-export { STOP_MAP, openAIToAnthropic };
+export { STOP_MAP, stopReasonFor, openAIToAnthropic };

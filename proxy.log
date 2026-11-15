@@ -24,3 +24,11 @@ deepai-proxy listening on http://127.0.0.1:8787
   active   : deltaapoc317
   upstream : https://api.deepai.org/deepai_code   machine header: off   local digest: machine-id
 version: app 0.3.37 -> 0.3.38 (from download redirect)
+deepai-proxy listening on http://127.0.0.1:8787
+  UI       : http://127.0.0.1:8787/
+  OpenAI   : POST http://127.0.0.1:8787/v1/chat/completions
+  Anthropic: POST http://127.0.0.1:8787/v1/messages
+  accounts : deltaapoc317, roshanlama31769, tomoenanami317
+  active   : deltaapoc317
+  upstream : https://api.deepai.org/deepai_code   machine header: off   local digest: machine-id
+version: app 0.3.37 -> 0.3.38 (from download redirect)

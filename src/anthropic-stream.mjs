@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
-import { STOP_MAP } from "./openai-to-anthropic.mjs";
+import { stopReasonFor } from "./openai-to-anthropic.mjs";
 import { recordUsage } from "./metrics.mjs";
-import { streamFailureMessage } from "./stream-guard.mjs";
+import { streamFailureMessage, keepAliveWhileQuiet } from "./stream-guard.mjs";
 
 function sseChunk(text) {
   return `event: ${text.event}\ndata: ${JSON.stringify(text.data)}\n\n`;
@@ -11,7 +11,7 @@ function sseChunk(text) {
  * OpenAI SSE -> Anthropic SSE.
  * Text goes in block 0 unless a thinking block opens first; tool calls follow.
  */
-function openAIToAnthropicStream(upstreamBody, model, res, account) {
+function openAIToAnthropicStream(upstreamBody, model, res, account, { keepAliveMs = 15_000 } = {}) {
   const dec = new TextDecoder();
   let buf = "";
   let started = false;
@@ -22,6 +22,7 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
   let finish = null;
   let usage = { input_tokens: 0, output_tokens: 0 };
   let id = `msg_${crypto.randomUUID().replace(/-/g, "")}`;
+  let beat = null;
 
   // Backpressure: res.write() returns false when the socket buffer is full.
   // Remembering that and awaiting 'drain' once per upstream chunk keeps memory
@@ -29,6 +30,7 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
   let needDrain = false;
   const write = (event, data) => {
     if (res.writableEnded || res.destroyed) return;
+    beat?.touch();
     if (!res.write(sseChunk({ event, data }))) needDrain = true;
   };
   const drained = () => {
@@ -91,6 +93,13 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
 
   const closeThinking = () => {
     if (thinkingIndex < 0) return;
+    // Anthropic always closes a thinking block with a signature; clients that
+    // validate or replay thinking blocks reject one that has none.
+    write("content_block_delta", {
+      type: "content_block_delta",
+      index: thinkingIndex,
+      delta: { type: "signature_delta", signature: "" },
+    });
     write("content_block_stop", { type: "content_block_stop", index: thinkingIndex });
     thinkingIndex = -1;
   };
@@ -108,10 +117,14 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
     }
     if (json?.id) id = json.id;
     if (json?.usage) {
+      const u = json.usage;
+      // Merge, do not replace: usage can arrive split across frames, and a
+      // frame without cached details must not erase the count from an earlier
+      // one.
       usage = {
-        input_tokens: json.usage.prompt_tokens ?? usage.input_tokens,
-        output_tokens: json.usage.completion_tokens ?? usage.output_tokens,
-        cached: json.usage.prompt_tokens_details?.cached_tokens,
+        input_tokens: u.prompt_tokens ?? usage.input_tokens,
+        output_tokens: u.completion_tokens ?? usage.output_tokens,
+        cached: u.prompt_tokens_details?.cached_tokens ?? usage.cached,
       };
     }
     ensureStart(json?.usage);
@@ -179,10 +192,14 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
     for (const entry of toolBlocks.values()) {
       write("content_block_stop", { type: "content_block_stop", index: entry.blockIndex });
     }
+    const outUsage = { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens };
+    // Same cache field the non-stream converter reports, so a client that
+    // tracks cache reads sees them in both modes.
+    if (Number.isFinite(usage.cached)) outUsage.cache_read_input_tokens = usage.cached;
     write("message_delta", {
       type: "message_delta",
       delta: { stop_reason: stopReason, stop_sequence: null },
-      usage: { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens },
+      usage: outUsage,
     });
     recordUsage(usage, model, account);
     write("message_stop", { type: "message_stop" });
@@ -190,6 +207,14 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
 
   return new Promise((resolve) => {
     void (async () => {
+      // Keep-alive: a long reasoning pause emits no events, and an idle proxy
+      // in front of the container can close the stream. Anthropic clients
+      // understand "ping"; it is only sent when the stream has gone quiet.
+      beat = keepAliveMs > 0
+        ? keepAliveWhileQuiet(() => {
+            if (!needDrain) write("ping", { type: "ping" });
+          }, keepAliveMs)
+        : null;
       try {
         let stopped = false;
         let sawFinish = false;
@@ -257,10 +282,13 @@ function openAIToAnthropicStream(upstreamBody, model, res, account) {
         if (!stopped && !sawFinish && !sawDone) {
           throw new Error(streamFailureMessage("upstream closed the stream without a finish frame"));
         }
-        terminate(STOP_MAP[finish] || "end_turn");
+        // A tool-calling turn must say "tool_use" even when upstream says
+        // "stop", or the client never executes the tools.
+        terminate(stopReasonFor(finish, toolBlocks.size > 0));
       } catch (err) {
         write("error", { type: "error", error: { type: "api_error", message: String(err?.message || err) } });
       } finally {
+        beat?.stop();
         if (!res.writableEnded) res.end();
         resolve();
       }

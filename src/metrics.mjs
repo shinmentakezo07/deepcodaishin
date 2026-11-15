@@ -8,6 +8,7 @@ const state = {
   errors: 0,
   promptTokens: 0,
   completionTokens: 0,
+  cachedTokens: 0,
   lastRequestAt: null,
   lastModel: null,
   lastAccount: null,
@@ -29,7 +30,7 @@ function accountId(acc) {
 function bucket(id, name) {
   let entry = perAccount.get(id);
   if (!entry) {
-    entry = { id, name: name || "", requests: 0, errors: 0, rejected: 0, promptTokens: 0, completionTokens: 0, lastAt: null };
+    entry = { id, name: name || "", requests: 0, errors: 0, rejected: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, lastAt: null };
     perAccount.set(id, entry);
   }
   if (name) entry.name = name;
@@ -65,8 +66,15 @@ function recordUsage(usage, model, acc) {
   if (!usage) return;
   const prompt = usage.prompt_tokens ?? usage.input_tokens;
   const completion = usage.completion_tokens ?? usage.output_tokens;
+  // Cached prompt tokens are a subset of the prompt count, reported either as
+  // an Anthropic field or inside OpenAI's prompt_tokens_details.
+  const cached =
+    usage.cached ??
+    usage.cache_read_input_tokens ??
+    usage.prompt_tokens_details?.cached_tokens;
   if (Number.isFinite(prompt)) state.promptTokens += prompt;
   if (Number.isFinite(completion)) state.completionTokens += completion;
+  if (Number.isFinite(cached)) state.cachedTokens += cached;
   if (model) state.lastModel = model;
 
   const id = acc ? accountId(acc) : lastAccountId;
@@ -75,6 +83,7 @@ function recordUsage(usage, model, acc) {
     if (entry) {
       if (Number.isFinite(prompt)) entry.promptTokens += prompt;
       if (Number.isFinite(completion)) entry.completionTokens += completion;
+      if (Number.isFinite(cached)) entry.cachedTokens += cached;
     }
   }
 }
@@ -109,6 +118,7 @@ function perAccountList() {
       rejected: e.rejected || 0,
       promptTokens: e.promptTokens,
       completionTokens: e.completionTokens,
+      cachedTokens: e.cachedTokens || 0,
       totalTokens: e.promptTokens + e.completionTokens,
       lastAt: e.lastAt,
     }))
@@ -136,6 +146,7 @@ function resetMetrics() {
     errors: 0,
     promptTokens: 0,
     completionTokens: 0,
+    cachedTokens: 0,
     lastRequestAt: null,
     lastModel: null,
     lastAccount: null,
