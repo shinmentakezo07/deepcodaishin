@@ -9,7 +9,8 @@ import {
   APP_VERSION_TTL_MS,
   DOWNLOAD_PROBE_URL,
 } from "./config.mjs";
-import { listAccounts } from "./account.mjs";
+import { listAccounts, accountMachineId, machineHeaderEnabled } from "./account.mjs";
+import { MACHINE_HEADER } from "./machine.mjs";
 
 // ---------------------------------------------------------------- lane gate
 //
@@ -85,9 +86,22 @@ function laneInfo() {
   };
 }
 
-/** The check-in beacon the app attaches to /theos: v=<ver>;up=<uptime>;pi;focus. */
-function beaconHeader() {
-  return `v=${appVersion};up=${Math.floor(process.uptime())};pi=0;focus=0`;
+/**
+ * The check-in beacon the app attaches to /theos: v=<ver>;up=<uptime>;pi;focus.
+ * `pi` is the pro flag, so it has to follow the account the request is for.
+ */
+function beaconHeader(account) {
+  return `v=${appVersion};up=${Math.floor(process.uptime())};pi=${account?.isPro ? 1 : 0};focus=0`;
+}
+
+/**
+ * The User-Agent every request presents.
+ *
+ * Node's fetch would send "node", which the desktop app never does. Override
+ * with DEEPAI_USER_AGENT to match the exact build.
+ */
+function userAgent() {
+  return process.env.DEEPAI_USER_AGENT || "DeepAI-Code/" + appVersion;
 }
 
 /** True when a response is the gateway's "this build is retired" refusal. */
@@ -138,14 +152,21 @@ function kindOf(status, rejected, jsonOk) {
 
 /** One /theos call at one lane. Never throws: a transport error is "unknown". */
 async function probe(laneValue, signal) {
+  const account = probeAccount();
   const headers = {
     "Content-Type": "application/json",
     "X-DeepAI-Code-Theos": String(laneValue),
     "X-DeepAI-Code-Instance": INSTANCE_ID,
-    "X-DeepAI-Code-Beacon": beaconHeader(),
+    "X-DeepAI-Code-Beacon": beaconHeader(account),
+    "User-Agent": userAgent(),
   };
-  const account = probeAccount();
   if (account && account.apiKey) headers["api-key"] = account.apiKey;
+  // The app's check-in carries the machine digest too; a probe without it is a
+  // request the app never makes (and gets 403 machine_required).
+  if (account && machineHeaderEnabled()) {
+    const digest = accountMachineId(account, MACHINE_HEADER);
+    if (digest) headers["X-DeepAI-Code-Machine"] = digest;
+  }
 
   const timeout = AbortSignal.timeout(PROBE_TIMEOUT_MS);
   const deadline =
@@ -319,7 +340,7 @@ function refreshAppVersion({ force = false } = {}) {
       const res = await fetch(DOWNLOAD_PROBE_URL, {
         method: "HEAD",
         redirect: "follow",
-        headers: { "user-agent": "deepai-proxy" },
+        headers: { "user-agent": userAgent() },
         signal: AbortSignal.timeout(10_000),
       });
       if (!res.ok) throw new Error("download redirect answered " + res.status);
@@ -376,6 +397,7 @@ export {
   currentAppVersion,
   laneInfo,
   beaconHeader,
+  userAgent,
   isLaneRejection,
   noteLaneRejected,
   refreshLane,

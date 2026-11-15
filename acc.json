@@ -6,7 +6,7 @@
   "settings": {
     "rotation": "round-robin",
     "active": "deltaapoc317",
-    "sendMachineHeader": false
+    "sendMachineHeader": true
   },
   "accounts": [
     {

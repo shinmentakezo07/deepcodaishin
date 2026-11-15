@@ -122,7 +122,8 @@ path.
 | `PROXY_TOKEN` | *(empty)* | require `Authorization: Bearer <token>` on `/api/*` and `/v1/*` (`/health`, `/v1/models`, the panel itself stay public; the panel asks for the token once and keeps it in `localStorage`) |
 | `DEEPAI_API_ORIGIN` | `https://api.deepai.org` | origin override |
 | `DEEPAI_USERDATA` | `~/.deepai-code/userdata` | source for `import-app` and the model catalog |
-| `DEEPAI_MACHINE_HEADER` | off (`1` enables) | send `X-DeepAI-Code-Machine` (per-account digest) |
+| `DEEPAI_MACHINE_HEADER` | on (`0` disables) | send `X-DeepAI-Code-Machine` (per-account digest; the app always sends it) |
+| `DEEPAI_USER_AGENT` | `DeepAI-Code/<version>` | `User-Agent` requests present; set it to the exact string the installed app sends |
 | `DEEPAI_MACHINE_ID` | auto | raw id to hash into the machine header |
 | `DEEPAI_SESSION_AFFINITY` | per account | force one affinity value |
 | `DEEPAI_LANE_VERSION` | `6` | seed for lane discovery — the lane is discovered from the gateway, not assumed |

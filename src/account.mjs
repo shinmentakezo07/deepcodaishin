@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { ACC_PATH, ACCOUNTS_PATH, APP_USERDATA, APP_ACCOUNT_BIN } from "./config.mjs";
+import { ACC_PATH, ACCOUNTS_PATH, APP_USERDATA, APP_ACCOUNT_BIN, SEND_MACHINE_HEADER, SEND_MACHINE_DISABLED } from "./config.mjs";
 
 // ---------------------------------------------------------------- store
 //
@@ -15,7 +15,7 @@ import { ACC_PATH, ACCOUNTS_PATH, APP_USERDATA, APP_ACCOUNT_BIN } from "./config
 // apiKey mirrors the active account so a reader that predates the accounts
 // array still finds a credential.
 
-const DEFAULT_SETTINGS = { rotation: "round-robin", active: "", sendMachineHeader: false };
+const DEFAULT_SETTINGS = { rotation: "round-robin", active: "", sendMachineHeader: true };
 const MIN_WEIGHT = 1;
 const MAX_WEIGHT = 20;
 const MAX_RING = 2000;
@@ -42,7 +42,7 @@ function cleanSettings(raw) {
   return {
     rotation,
     active: cleanName(raw && raw.active),
-    sendMachineHeader: raw ? raw.sendMachineHeader === true : false,
+    sendMachineHeader: raw ? raw.sendMachineHeader !== false : true,
   };
 }
 
@@ -177,6 +177,22 @@ function loadAccounts() {
 
 function loadSettings() {
   return loadStore().settings;
+}
+
+/**
+ * Whether requests carry X-DeepAI-Code-Machine.
+ *
+ * DEEPAI_MACHINE_HEADER=1/0 forces it; unset follows the panel setting, which
+ * defaults to on because the desktop app always sends the header.
+ */
+function machineHeaderEnabled() {
+  if (SEND_MACHINE_DISABLED) return false;
+  if (SEND_MACHINE_HEADER) return true;
+  try {
+    return loadSettings().sendMachineHeader !== false;
+  } catch {
+    return true;
+  }
 }
 
 function saveStore(store) {
@@ -642,6 +658,7 @@ export {
   loadStore,
   loadAccounts,
   loadSettings,
+  machineHeaderEnabled,
   saveStore,
   saveAccounts,
   saveSettings,

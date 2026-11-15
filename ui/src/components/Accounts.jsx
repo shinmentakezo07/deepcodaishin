@@ -78,6 +78,47 @@ function RequestChip({ count, rejected, share, tokens, promptTokens, completionT
   );
 }
 
+function fmtBalance(v) {
+  const n = Number(v);
+  return Number.isFinite(n)
+    ? n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : String(v == null ? "-" : v);
+}
+
+/** The last /theos check for this account: balance + lane, or the refusal. */
+function TheosChip({ t }) {
+  if (!t) return null;
+  const title = [
+    t.status ? "HTTP " + t.status : "no response",
+    t.enabled === true ? "enabled" : t.enabled === false ? "disabled" : null,
+    t.granted != null ? "granted " + fmtBalance(t.granted) : null,
+    t.refreshAt ? "refresh at " + t.refreshAt : null,
+    t.checkInSeconds != null ? "check-in window " + t.checkInSeconds + "s" : null,
+    t.detail,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  if (!t.ok) {
+    return (
+      <span
+        className="rounded border border-rose-400/40 bg-rose-400/10 px-1 py-px text-[9.5px] font-bold uppercase text-rose-300"
+        title={title}
+      >
+        theos {t.status || "err"}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="rounded border border-emerald-400/30 bg-emerald-400/[0.08] px-1 py-px font-mono text-[9.5px] text-emerald-300/90"
+      title={title}
+    >
+      {t.balance != null ? fmtBalance(t.balance) : "theos"}
+      {t.laneVersion != null ? " · lane " + t.laneVersion : ""}
+    </span>
+  );
+}
+
 export default function AccountsCard({
   accounts,
   perAccount,
@@ -85,10 +126,12 @@ export default function AccountsCard({
   settings,
   rotation,
   busy,
+  theos,
   onWeight,
   onPin,
   onRemove,
   onVerify,
+  onTheos,
   onRemoveAll,
   onExport,
   onCapture,
@@ -198,6 +241,7 @@ export default function AccountsCard({
                 </div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 font-mono text-[10.5px] text-slate-500">
                   {a.machineId ? <span>machine {a.machineId}...</span> : null}
+                  <TheosChip t={(theos || {})[a.name]} />
                   <RequestChip
                     count={u.requests || 0}
                     rejected={u.rejected || 0}
@@ -229,6 +273,15 @@ export default function AccountsCard({
                   </Button>
                   <Button variant="ghost" size="xs" disabled={busy} onClick={() => onVerify(a.name)}>
                     Verify
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    disabled={busy}
+                    onClick={() => onTheos(a.name)}
+                    title="Check the check-in balance and lane for this account"
+                  >
+                    Theos
                   </Button>
                   <Button variant="danger" size="xs" disabled={busy} onClick={() => onRemove(a.index)}>
                     Remove

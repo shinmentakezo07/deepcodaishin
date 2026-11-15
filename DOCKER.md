@@ -89,7 +89,8 @@ Replicas     : 1
 | `ACCOUNT` | *(active)* | Default account name for requests without `?account=` |
 | `PROXY_TOKEN` | *(empty)* | Require `Authorization: Bearer <token>` on `/v1/*` |
 | `DEEPAI_API_ORIGIN` | `https://api.deepai.org` | Upstream origin override |
-| `DEEPAI_MACHINE_HEADER` | off | Send per-account `X-DeepAI-Code-Machine` (`1` enables; the panel can toggle it) |
+| `DEEPAI_MACHINE_HEADER` | on | Send per-account `X-DeepAI-Code-Machine` (`0` disables; the panel can toggle it) |
+| `DEEPAI_USER_AGENT` | `DeepAI-Code/<version>` | `User-Agent` for upstream requests; set the installed app's exact string |
 | `DEEPAI_MACHINE_ID` | auto probe | Raw id hashed into the local machine digest |
 | `VERIFY_MODEL` | `deepseek-v4.1-flash` | Model used by `verify` |
 | `LOG_REQUESTS` | off | Log inbound requests (credentials redacted) |

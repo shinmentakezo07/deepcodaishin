@@ -68,6 +68,7 @@ export const api = {
   completeLogin: (text) =>
     request("/api/login/callback", { method: "POST", body: JSON.stringify({ url: text }) }),
   verify: (name) => request("/api/verify", { method: "POST", body: JSON.stringify({ name }) }),
+  theos: (name) => request("/api/theos", { method: "POST", body: JSON.stringify({ name }) }),
   chat: (payload) =>
     request("/v1/chat/completions", { method: "POST", body: JSON.stringify(payload) }),
   countTokens: (payload) =>

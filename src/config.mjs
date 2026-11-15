@@ -31,10 +31,12 @@ export const APP_VERSION = process.env.DEEPAI_APP_VERSION || "0.3.37";
 export const APP_VERSION_TTL_MS = 6 * 60 * 60 * 1000;
 // Redirects to the current release file, e.g. DeepAI-Code-0.3.37-x86_64.AppImage.
 export const DOWNLOAD_PROBE_URL = "https://deepai.org/download/deepai-code/linux-x64";
-// Off by default: the local digest is the value the gateway rejected on this
-// machine. Each account still carries its own digest (see account.mjs), so
-// DEEPAI_MACHINE_HEADER=1 sends the account digest instead of the local one.
+// The desktop app always sends X-DeepAI-Code-Machine, so it is on by default
+// (the panel can turn it off). DEEPAI_MACHINE_HEADER=1/0 forces it either way.
+// Each account carries its own digest (see account.mjs), so accounts never
+// share a machine.
 export const SEND_MACHINE_HEADER = process.env.DEEPAI_MACHINE_HEADER === "1";
+export const SEND_MACHINE_DISABLED = process.env.DEEPAI_MACHINE_HEADER === "0";
 export const LOG_REQUESTS = process.env.LOG_REQUESTS === "1";
 // Extra browser origins allowed to call the panel API, comma separated
 // (e.g. a custom domain in front of a platform hostname). Same-origin is always

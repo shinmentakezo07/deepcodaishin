@@ -1,10 +1,10 @@
-import { MODEL_BASE, DEBUG_HEADERS, SEND_MACHINE_HEADER } from "./config.mjs";
+import { MODEL_BASE, DEBUG_HEADERS } from "./config.mjs";
 import { fingerprintHeaders } from "./fingerprint.mjs";
 import { ensureLaneSoon, isLaneRejection, noteLaneRejected, refreshLane, refreshAppVersion } from "./lane.mjs";
 import {
   nextAccountSequence,
   accountCount,
-  loadSettings,
+  machineHeaderEnabled,
   markAccountRejected,
   markAccountHealthy,
 } from "./account.mjs";
@@ -66,18 +66,8 @@ function isRetryable(status) {
   return status === 401 || status === 403 || status === 429;
 }
 
-/** The store setting wins only when the env var has not already forced it on. */
-function sendMachine() {
-  if (SEND_MACHINE_HEADER) return true;
-  try {
-    return loadSettings().sendMachineHeader === true;
-  } catch {
-    return false;
-  }
-}
-
 function postOnce(account, body, affinity, signal) {
-  const headers = fingerprintHeaders(account, { "X-Session-Affinity": affinity }, { machine: sendMachine() });
+  const headers = fingerprintHeaders(account, { "X-Session-Affinity": affinity }, { machine: machineHeaderEnabled() });
   logHeaders(headers);
   return fetch(MODEL_BASE + "/chat/completions", {
     method: "POST",

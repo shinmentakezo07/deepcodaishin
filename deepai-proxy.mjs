@@ -20,7 +20,7 @@
  *   Content-Type: application/json
  *   X-DeepAI-Code-Theos: 4
  *   X-DeepAI-Code-Instance: <32 hex, per process>
- *   X-DeepAI-Code-Machine: per-account digest (DEEPAI_MACHINE_HEADER=1)
+ *   X-DeepAI-Code-Machine: per-account digest (on by default; DEEPAI_MACHINE_HEADER=0 disables)
  *   api-key: <account api key>
  *   X-Session-Affinity: per-account, stable across restarts
  *

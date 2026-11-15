@@ -71,6 +71,8 @@ export default function App() {
   const [loginName, setLoginName] = useState("");
   const [toasts, setToasts] = useState([]);
   const [online, setOnline] = useState(true);
+  // Last /theos result per account name: balance, lane, enabled, refresh time.
+  const [theos, setTheos] = useState({});
   // PROXY_TOKEN is set on the server: every /api and /v1 call needs the bearer,
   // so the panel asks for it once and keeps it in localStorage.
   const [needsToken, setNeedsToken] = useState(false);
@@ -172,6 +174,39 @@ export default function App() {
     }, 5000);
     return () => clearInterval(t);
   }, [refreshHealth, refreshUsage]);
+
+  // Per-account /theos: balance, lane and refresh time. Refreshed when the
+  // account list changes and every 5 minutes (the check-in window is 10), so
+  // the row shows each account's own numbers without hammering the gateway.
+  const accountNames = (data.accounts || []).map((a) => a.name).filter(Boolean).join("\n");
+  useEffect(() => {
+    if (!accountNames) return undefined;
+    const names = accountNames.split("\n");
+    let stopped = false;
+    const run = async () => {
+      const pairs = await Promise.all(
+        names.map(async (name) => {
+          try {
+            return [name, await api.theos(name)];
+          } catch {
+            return null;
+          }
+        }),
+      );
+      if (stopped) return;
+      setTheos((prev) => {
+        const next = { ...prev };
+        for (const pair of pairs) if (pair) next[pair[0]] = pair[1];
+        return next;
+      });
+    };
+    run();
+    const t = setInterval(run, 5 * 60 * 1000);
+    return () => {
+      stopped = true;
+      clearInterval(t);
+    };
+  }, [accountNames]);
 
   // completed sign-in watcher
   useEffect(() => {
@@ -355,6 +390,7 @@ export default function App() {
       setOutput("Verifying " + name + "...");
       try {
         const r = await api.verify(name);
+        if (r.theos) setTheos((prev) => ({ ...prev, [r.name]: r.theos }));
         const lines = [];
         lines.push("account  : " + r.name + "  (" + (r.username || "?") + ", pro=" + r.isPro + ")");
         lines.push("machine  : " + String(r.machineId).slice(0, 12) + "...  (local source: " + r.machineSource + ")");
@@ -365,6 +401,17 @@ export default function App() {
         lines.push("");
         Object.keys(r.checks).forEach((k) => {
           const c = r.checks[k];
+          if (k === "theos" && r.theos) {
+            const t = r.theos;
+            lines.push(
+              "theos".padEnd(20) + ": " + t.status + " " +
+                (t.ok
+                  ? "enabled=" + t.enabled + " balance=" + t.balance +
+                    " lane=" + t.laneVersion + (t.refreshAt ? " refresh=" + t.refreshAt : "")
+                  : t.detail),
+            );
+            return;
+          }
           lines.push(k.padEnd(20) + ": " + c.status + " " + c.detail);
         });
         lines.push("");
@@ -375,6 +422,22 @@ export default function App() {
         const d = (err.data && (err.data.checks || err.data)) || {};
         setOutput("Verify failed: " + err.message + "\n" + JSON.stringify(d, null, 2));
         toast("Verify failed: " + err.message, "err");
+      }
+    });
+
+  const onTheos = (name) =>
+    withBusy(async () => {
+      try {
+        const r = await api.theos(name);
+        setTheos((prev) => ({ ...prev, [name]: r }));
+        toast(
+          r.ok
+            ? "Theos for " + name + ": balance " + r.balance
+            : "Theos for " + name + " failed: " + (r.status || r.detail),
+          r.ok ? "ok" : "err",
+        );
+      } catch (err) {
+        toast("Theos failed for " + name + ": " + err.message, "err");
       }
     });
 
@@ -518,6 +581,8 @@ export default function App() {
                 onPin={onPin}
                 onRemove={onRemove}
                 onVerify={onVerify}
+                theos={theos}
+                onTheos={onTheos}
                 onRemoveAll={onRemoveAll}
                 onExport={onExport}
                 onCapture={onCapture}

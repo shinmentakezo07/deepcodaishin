@@ -143,6 +143,10 @@ X-DeepAI-Code-Instance: <32 hex, per process>
 X-DeepAI-Code-Machine: <sha256(machine id)>
 api-key: <account api key>
 X-Session-Affinity: <stable per process>
+User-Agent: DeepAI-Code/<version>
+Accept: */*
+Accept-Language: en-US,en;q=0.9
+Accept-Encoding: gzip, deflate, br
 
 {"model":"…","messages":[…],"stream":true,"stream_options":{"include_usage":true}, …}
 ```

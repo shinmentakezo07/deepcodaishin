@@ -11,7 +11,6 @@ import {
   ROOT_DIR,
   ACCOUNT_NAME,
   LOG_REQUESTS,
-  SEND_MACHINE_HEADER,
   EXTRA_ORIGINS,
 } from "./config.mjs";
 import { handleApi } from "./api.mjs";
@@ -27,6 +26,7 @@ import {
   accountsRevision,
   rotationState,
   loadSettings,
+  machineHeaderEnabled,
   captureAppAccounts,
 } from "./account.mjs";
 import { catalogIds, refreshModels, modelsInfo } from "./models.mjs";
@@ -66,7 +66,7 @@ function healthPayload() {
     lane: laneInfo(),
     modelPool: modelsInfo(),
     machine: MACHINE_HEADER ? "present (" + MACHINE_SOURCE + ")" : "absent",
-    sendMachineHeader: SEND_MACHINE_HEADER || loadSettings().sendMachineHeader === true,
+    sendMachineHeader: machineHeaderEnabled(),
     upstream: MODEL_BASE,
     ui: "http://127.0.0.1:" + PORT + "/",
   };
@@ -620,7 +620,7 @@ function startServer() {
     console.log("  active   : " + ((named.find((a) => a.active) || named[0] || {}).name || "-"));
     console.log(
       "  upstream : " + MODEL_BASE + "   machine header: " +
-        (SEND_MACHINE_HEADER || loadSettings().sendMachineHeader ? "on (per account)" : "off") +
+        (machineHeaderEnabled() ? "on (per account)" : "off") +
         "   local digest: " + (MACHINE_HEADER ? MACHINE_SOURCE : "unavailable"),
     );
   });

@@ -12,7 +12,7 @@
 import { MODEL_BASE, ACCOUNT_NAME } from "./config.mjs";
 import { findAccount, listAccounts, accountMachineId, accountAffinity } from "./account.mjs";
 import { fingerprintHeaders, MACHINE_HEADER, MACHINE_SOURCE } from "./fingerprint.mjs";
-import { beaconHeader, laneInfo, refreshLane } from "./lane.mjs";
+import { beaconHeader, laneInfo, refreshLane, refreshAppVersion } from "./lane.mjs";
 
 const PROBE_MODEL = process.env.VERIFY_MODEL || "deepseek-v4.1-flash";
 
@@ -46,11 +46,56 @@ async function probeChat(headers, withMachine) {
   };
 }
 
+/**
+ * GET /theos for one account, parsed. Never throws: a transport error is a
+ * status-0 result so the panel can show what happened.
+ */
+async function theosFor(acc) {
+  const headers = fingerprintHeaders(acc, {}, { machine: true });
+  const out = {
+    ok: false,
+    status: 0,
+    enabled: null,
+    balance: null,
+    granted: null,
+    refreshAt: null,
+    laneVersion: null,
+    checkInSeconds: null,
+    detail: "",
+  };
+  try {
+    const res = await fetch(MODEL_BASE + "/theos", {
+      method: "GET",
+      headers: { ...headers, "X-DeepAI-Code-Beacon": beaconHeader(acc) },
+      redirect: "error",
+    });
+    const body = await res.text().catch(() => "");
+    out.ok = res.ok;
+    out.status = res.status;
+    out.detail = body.slice(0, 160).replace(/\s+/g, " ");
+    try {
+      const data = JSON.parse(body);
+      if (typeof data?.enabled === "boolean") out.enabled = data.enabled;
+      if (data?.balance != null) out.balance = String(data.balance);
+      if (data?.granted != null) out.granted = String(data.granted);
+      if (data?.refresh_at) out.refreshAt = String(data.refresh_at);
+      if (typeof data?.lane_version === "number") out.laneVersion = data.lane_version;
+      if (typeof data?.check_in?.seconds === "number") out.checkInSeconds = data.check_in.seconds;
+    } catch {}
+  } catch (err) {
+    out.detail = String(err?.message || err);
+  }
+  return out;
+}
+
 /** Run every check for one account and return a report. Never throws. */
 async function verifyAccount(acc) {
   // The lane is discovered, not hardcoded: make sure it is current before the
   // probe so the report reflects what the next real request would send.
   await refreshLane({ force: true });
+  // The beacon and the UA carry the release version, so the report should use
+  // the live one rather than the fallback.
+  await refreshAppVersion();
   const headers = fingerprintHeaders(acc, {}, { machine: true });
   const report = {
     name: acc.name,
@@ -61,22 +106,18 @@ async function verifyAccount(acc) {
     machineId: accountMachineId(acc, MACHINE_HEADER),
     machineSource: MACHINE_SOURCE,
     affinity: accountAffinity(acc),
+    theos: null,
     checks: {},
     ok: false,
     hint: "",
   };
 
-  try {
-    const theos = await fetch(MODEL_BASE + "/theos", {
-      method: "GET",
-      headers: { ...headers, "X-DeepAI-Code-Beacon": beaconHeader() },
-      redirect: "error",
-    });
-    const body = await theos.text().catch(() => "");
-    report.checks.theos = { ok: theos.ok, status: theos.status, detail: body.slice(0, 120).replace(/\s+/g, " ") };
-  } catch (err) {
-    report.checks.theos = { ok: false, status: 0, detail: String(err.message || err) };
-  }
+  report.theos = await theosFor(acc);
+  report.checks.theos = {
+    ok: report.theos.ok,
+    status: report.theos.status,
+    detail: report.theos.detail.slice(0, 120),
+  };
 
   try {
     report.checks.chatWithMachine = await probeChat(headers, true);
@@ -129,7 +170,13 @@ async function verify(name) {
   console.log("affinity : " + report.affinity);
   console.log();
   for (const [label, check] of Object.entries(report.checks)) {
-    console.log(label.padEnd(20) + ": " + check.status + " " + check.detail);
+    const detail =
+      label === "theos" && report.theos?.ok
+        ? "enabled=" + report.theos.enabled + " balance=" + report.theos.balance +
+          " lane=" + report.theos.laneVersion +
+          (report.theos.refreshAt ? " refresh=" + report.theos.refreshAt : "")
+        : check.detail;
+    console.log(label.padEnd(20) + ": " + check.status + " " + detail);
   }
   console.log();
   if (!report.ok) {
@@ -139,4 +186,4 @@ async function verify(name) {
   console.log("OK - the gateway accepts account " + report.name);
 }
 
-export { verify, verifyAccount };
+export { verify, verifyAccount, theosFor };

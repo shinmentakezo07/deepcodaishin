@@ -20,8 +20,9 @@ import {
   coolingAccounts,
 } from "./account.mjs";
 import { startLoginFlow, completeLoginFromText, pendingStates } from "./login.mjs";
-import { verifyAccount } from "./verify.mjs";
+import { verifyAccount, theosFor } from "./verify.mjs";
 import { snapshot } from "./metrics.mjs";
+import { refreshLane } from "./lane.mjs";
 
 // ---------------------------------------------------------------- api routes
 
@@ -192,6 +193,22 @@ async function handleApi(req, res, url, healthPayload) {
     if (!acc) return json(res, 404, errBody("account not found", "not_found_error"));
     const report = await verifyAccount(acc);
     return json(res, report.ok ? 200 : 502, report);
+  }
+
+  if (p === "/api/theos" && req.method === "POST") {
+    let input = {};
+    try {
+      const raw = await readBody(req);
+      if (raw) input = JSON.parse(raw);
+    } catch {
+      return json(res, 400, errBody("invalid JSON body", "invalid_request_error"));
+    }
+    const acc = findAccount(input.name || undefined);
+    if (!acc) return json(res, 404, errBody("account not found", "not_found_error"));
+    // A stale lane would show up as a 426 here, so refresh it first (a no-op
+    // inside LANE_REFRESH_MS).
+    await refreshLane();
+    return json(res, 200, { name: acc.name, ...(await theosFor(acc)) });
   }
 
   if (p === "/api/login/callback" && req.method === "POST") {
